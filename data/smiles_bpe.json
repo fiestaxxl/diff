@@ -1,0 +1,2869 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "<pad>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<bos>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "<eos>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "<unk>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 4,
+      "content": "<mask>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 386,
+      "content": "[13C@H]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 387,
+      "content": "[13CH2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 388,
+      "content": "[13CH3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 389,
+      "content": "[13CH]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 390,
+      "content": "[13C]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 391,
+      "content": "[14C]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 392,
+      "content": "[2H]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 393,
+      "content": "[Al+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 394,
+      "content": "[Al+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 395,
+      "content": "[As+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 396,
+      "content": "[AsH]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 397,
+      "content": "[As]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 398,
+      "content": "[Au+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 399,
+      "content": "[Au]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 400,
+      "content": "[B-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 401,
+      "content": "[Ba+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 402,
+      "content": "[Be+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 403,
+      "content": "[Be]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 404,
+      "content": "[Br-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 405,
+      "content": "[C+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 406,
+      "content": "[C-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 407,
+      "content": "[C@@H]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 408,
+      "content": "[C@@]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 409,
+      "content": "[C@H]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 410,
+      "content": "[C@]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 411,
+      "content": "[CH+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 412,
+      "content": "[CH-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 413,
+      "content": "[CH2-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 414,
+      "content": "[CH2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 415,
+      "content": "[CH3-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 416,
+      "content": "[CH3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 417,
+      "content": "[CH]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 418,
+      "content": "[C]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 419,
+      "content": "[Ca+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 420,
+      "content": "[Cd+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 421,
+      "content": "[Cl+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 422,
+      "content": "[Cl+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 423,
+      "content": "[Cl-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 424,
+      "content": "[Co+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 425,
+      "content": "[Co+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 426,
+      "content": "[Co]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 427,
+      "content": "[Cr+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 428,
+      "content": "[Cr+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 429,
+      "content": "[Cr]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 430,
+      "content": "[Cu+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 431,
+      "content": "[Cu]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 432,
+      "content": "[Fe+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 433,
+      "content": "[Fe+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 434,
+      "content": "[Fe+4]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 435,
+      "content": "[Fe+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 436,
+      "content": "[Fe]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 437,
+      "content": "[Gd+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 438,
+      "content": "[H+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 439,
+      "content": "[HH]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 440,
+      "content": "[Hg+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 441,
+      "content": "[Hg+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 442,
+      "content": "[Hg]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 443,
+      "content": "[I+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 444,
+      "content": "[I+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 445,
+      "content": "[I-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 446,
+      "content": "[Ir]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 447,
+      "content": "[K+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 448,
+      "content": "[Li+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 449,
+      "content": "[Mg+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 450,
+      "content": "[Mn+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 451,
+      "content": "[Mo+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 452,
+      "content": "[Mo+4]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 453,
+      "content": "[Mo+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 454,
+      "content": "[Mo]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 455,
+      "content": "[N+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 456,
+      "content": "[N-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 457,
+      "content": "[N@+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 458,
+      "content": "[N@@+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 459,
+      "content": "[NH+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 460,
+      "content": "[NH-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 461,
+      "content": "[NH2+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 462,
+      "content": "[NH2-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 463,
+      "content": "[NH3+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 464,
+      "content": "[NH4+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 465,
+      "content": "[N]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 466,
+      "content": "[Na+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 467,
+      "content": "[Ni+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 468,
+      "content": "[Ni]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 469,
+      "content": "[O+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 470,
+      "content": "[O-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 471,
+      "content": "[OH+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 472,
+      "content": "[OH-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 473,
+      "content": "[O]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 474,
+      "content": "[P+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 475,
+      "content": "[P@]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 476,
+      "content": "[Pd+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 477,
+      "content": "[Pt+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 478,
+      "content": "[Pt]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 479,
+      "content": "[Ru+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 480,
+      "content": "[S+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 481,
+      "content": "[S-2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 482,
+      "content": "[S-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 483,
+      "content": "[S@@]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 484,
+      "content": "[S@]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 485,
+      "content": "[SH-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 486,
+      "content": "[S]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 487,
+      "content": "[Sb+3]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 488,
+      "content": "[Sb+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 489,
+      "content": "[Sb]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 490,
+      "content": "[Se+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 491,
+      "content": "[Se-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 492,
+      "content": "[Se]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 493,
+      "content": "[Si]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 494,
+      "content": "[Sn+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 495,
+      "content": "[Sn]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 496,
+      "content": "[Te]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 497,
+      "content": "[V]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 498,
+      "content": "[W]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 499,
+      "content": "[Zn+2]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 500,
+      "content": "[Zn]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 501,
+      "content": "[Zr]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 502,
+      "content": "[c-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 503,
+      "content": "[cH-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 504,
+      "content": "[c]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 505,
+      "content": "[n+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 506,
+      "content": "[n-]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 507,
+      "content": "[nH+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 508,
+      "content": "[nH]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 509,
+      "content": "[o+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 510,
+      "content": "[s+]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 511,
+      "content": "[se]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Split",
+    "pattern": {
+      "Regex": "\\[[^\\]]+\\]"
+    },
+    "behavior": "Isolated",
+    "invert": false
+  },
+  "post_processor": {
+    "type": "TemplateProcessing",
+    "single": [
+      {
+        "SpecialToken": {
+          "id": "<bos>",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "SpecialToken": {
+          "id": "<eos>",
+          "type_id": 0
+        }
+      }
+    ],
+    "pair": [
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "B",
+          "type_id": 1
+        }
+      }
+    ],
+    "special_tokens": {
+      "<bos>": {
+        "id": "<bos>",
+        "ids": [
+          1
+        ],
+        "tokens": [
+          "<bos>"
+        ]
+      },
+      "<eos>": {
+        "id": "<eos>",
+        "ids": [
+          2
+        ],
+        "tokens": [
+          "<eos>"
+        ]
+      }
+    }
+  },
+  "decoder": null,
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": "<unk>",
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": false,
+    "byte_fallback": false,
+    "ignore_merges": false,
+    "vocab": {
+      "<pad>": 0,
+      "<bos>": 1,
+      "<eos>": 2,
+      "<unk>": 3,
+      "<mask>": 4,
+      "#": 5,
+      "%": 6,
+      "(": 7,
+      ")": 8,
+      "*": 9,
+      "+": 10,
+      "-": 11,
+      ".": 12,
+      "/": 13,
+      "0": 14,
+      "1": 15,
+      "2": 16,
+      "3": 17,
+      "4": 18,
+      "5": 19,
+      "6": 20,
+      "7": 21,
+      "8": 22,
+      "9": 23,
+      ":": 24,
+      "=": 25,
+      "@": 26,
+      "A": 27,
+      "B": 28,
+      "C": 29,
+      "D": 30,
+      "E": 31,
+      "F": 32,
+      "G": 33,
+      "H": 34,
+      "I": 35,
+      "J": 36,
+      "K": 37,
+      "L": 38,
+      "M": 39,
+      "N": 40,
+      "O": 41,
+      "P": 42,
+      "Q": 43,
+      "R": 44,
+      "S": 45,
+      "T": 46,
+      "U": 47,
+      "V": 48,
+      "W": 49,
+      "X": 50,
+      "Y": 51,
+      "Z": 52,
+      "[": 53,
+      "\\": 54,
+      "]": 55,
+      "a": 56,
+      "b": 57,
+      "c": 58,
+      "d": 59,
+      "e": 60,
+      "f": 61,
+      "g": 62,
+      "h": 63,
+      "i": 64,
+      "j": 65,
+      "k": 66,
+      "l": 67,
+      "m": 68,
+      "n": 69,
+      "o": 70,
+      "p": 71,
+      "q": 72,
+      "r": 73,
+      "s": 74,
+      "t": 75,
+      "u": 76,
+      "v": 77,
+      "w": 78,
+      "x": 79,
+      "y": 80,
+      "z": 81,
+      "CC": 82,
+      "cc": 83,
+      "(=": 84,
+      "CCCC": 85,
+      "CO": 86,
+      "c1": 87,
+      ")(": 88,
+      "CCCCCCCC": 89,
+      "1O": 90,
+      ")=": 91,
+      "c2": 92,
+      "OC": 93,
+      "CCC": 94,
+      "nc": 95,
+      "c1cc": 96,
+      "2O": 97,
+      "c3": 98,
+      "c2cc": 99,
+      "COP": 100,
+      "3O": 101,
+      "1C": 102,
+      "CCN": 103,
+      "OP": 104,
+      "C1": 105,
+      "c1ccc": 106,
+      "nc3": 107,
+      "2C": 108,
+      "4O": 109,
+      "ccc1": 110,
+      ")(=": 111,
+      "Cl": 112,
+      "ccc": 113,
+      "CCCCCCCCCCCCCCCC": 114,
+      "c1c": 115,
+      "cc1": 116,
+      "CCCCC": 117,
+      "n2": 118,
+      ")/": 119,
+      "CN": 120,
+      "CC1": 121,
+      "c1ccccc1": 122,
+      "c2c": 123,
+      "cc2": 124,
+      "ccc2": 125,
+      "1CC": 126,
+      "3C": 127,
+      "(-": 128,
+      "c3cc": 129,
+      "c4": 130,
+      "c2ccc": 131,
+      "COC": 132,
+      "n2c": 133,
+      "5O": 134,
+      "OCC": 135,
+      "nc3c": 136,
+      "NC": 137,
+      "1OP": 138,
+      "n2cnc3c": 139,
+      "nc32": 140,
+      "ncnc32": 141,
+      "NCC": 142,
+      "c2ccccc2": 143,
+      "CCCCCCC": 144,
+      "C2": 145,
+      "CCCCCC": 146,
+      "COc1cc": 147,
+      "c1nc": 148,
+      "SCCN": 149,
+      "3CC": 150,
+      "(/": 151,
+      "n1": 152,
+      "12": 153,
+      "c3c": 154,
+      "(\\": 155,
+      "12C": 156,
+      "cc3": 157,
+      "ccc3": 158,
+      "CS": 159,
+      "n4": 160,
+      "Cc1c": 161,
+      "c1O": 162,
+      "4C": 163,
+      "1OC": 164,
+      "c3ccc": 165,
+      "cnc": 166,
+      "CCCCCCCCCCC": 167,
+      "6O": 168,
+      "c5": 169,
+      "2CC": 170,
+      "SC": 171,
+      "N1": 172,
+      "C3": 173,
+      "O2": 174,
+      "c3ccccc3": 175,
+      "C1C": 176,
+      "nc2": 177,
+      "Cc1cc": 178,
+      "Cc1ccc": 179,
+      "O1": 180,
+      "OS": 181,
+      "NCCC": 182,
+      "CCCCCCCCCCCCCCC": 183,
+      "Br": 184,
+      "CCCCCCCCCC": 185,
+      "cc4": 186,
+      "2N": 187,
+      "1N": 188,
+      "ccc12": 189,
+      "Cc1ccccc1": 190,
+      "5c": 191,
+      "n3": 192,
+      "CCCCN": 193,
+      "c4cc": 194,
+      "2CO": 195,
+      "O3": 196,
+      "n4cnc": 197,
+      "c1C": 198,
+      "CCCN": 199,
+      "CCCCCCCCCCCCCC": 200,
+      "n4cnc5c": 201,
+      "CCCCCCCCCCCCC": 202,
+      "CCO": 203,
+      "c12": 204,
+      "ncnc": 205,
+      "CCCCCCCCC": 206,
+      "7O": 207,
+      "cc1C": 208,
+      "3N": 209,
+      "3COP": 210,
+      "COc1ccc": 211,
+      "2OC": 212,
+      "CC2": 213,
+      "OC1": 214,
+      "OCCN": 215,
+      "4CC": 216,
+      "CCCCCCCCCCCCCCCCC": 217,
+      "c2ccccc12": 218,
+      "c4ccc": 219,
+      "2c": 220,
+      "c1n": 221,
+      "C4": 222,
+      "c2c1": 223,
+      "3OP": 224,
+      "3CO": 225,
+      "N2": 226,
+      "ccc1O": 227,
+      "C1O": 228,
+      "NS": 229,
+      "c2nc": 230,
+      "CCCCCCCCCCCC": 231,
+      "nc1": 232,
+      "c1cccc": 233,
+      "oc": 234,
+      "CCCCCCCCCCCCCCCCCC": 235,
+      "cc1O": 236,
+      "5CC": 237,
+      "1CCC": 238,
+      "NCCSC": 239,
+      "c4c": 240,
+      "54": 241,
+      "4c": 242,
+      "N1CCC": 243,
+      "c1ncnc2": 244,
+      "CCOC": 245,
+      "COS": 246,
+      "ccc4": 247,
+      "n4ccc": 248,
+      "5C": 249,
+      "Nc1ccc": 250,
+      "12CC": 251,
+      "4N": 252,
+      "3CCC": 253,
+      "OO": 254,
+      "c1ncn2": 255,
+      "C1CC": 256,
+      "ncnc54": 257,
+      "23C": 258,
+      "nc4": 259,
+      "Oc1ccc": 260,
+      "oc2cc": 261,
+      "Cn1": 262,
+      "oc3cc": 263,
+      "c1ccc2c": 264,
+      "c2cccc": 265,
+      "c2cc3": 266,
+      "OCCOCC": 267,
+      "23": 268,
+      "C2C": 269,
+      "c1ncnc2c1ncn2": 270,
+      "o1": 271,
+      "OCO": 272,
+      "CCCNC": 273,
+      "CCC1": 274,
+      "Cc1cnc": 275,
+      "c54": 276,
+      "NCCCC": 277,
+      "21": 278,
+      "8O": 279,
+      "cc2C": 280,
+      "Cc1cn": 281,
+      "c2O": 282,
+      "nc4O": 283,
+      "c2C": 284,
+      "Oc1cc": 285,
+      "COc1c": 286,
+      "c2n": 287,
+      "43C": 288,
+      "c2ccccc21": 289,
+      "2C1": 290,
+      "43": 291,
+      "Nc1ncnc2c1ncn2": 292,
+      "CCOP": 293,
+      "O4": 294,
+      "c5cc": 295,
+      "ccc23": 296,
+      "CC3": 297,
+      "n3cnc": 298,
+      "c6": 299,
+      "N2C": 300,
+      "c1OC": 301,
+      "NC1": 302,
+      "n3cnc4c": 303,
+      "Cc2ccccc2": 304,
+      "21C": 305,
+      "cc5": 306,
+      "C4C": 307,
+      "nc1O": 308,
+      "CCCCCCCCCCCCCCCCCCCCCCCC": 309,
+      "Oc2cc": 310,
+      "CN1": 311,
+      "n3ccc": 312,
+      "cc1Cl": 313,
+      "sc": 314,
+      "c3c2": 315,
+      "n4cc": 316,
+      "3CCC4": 317,
+      "cn": 318,
+      "CCCCC1": 319,
+      "CCCCCCCCCCCCCCCCCCCC": 320,
+      "COc1cc2c": 321,
+      "5N": 322,
+      "Nc1c": 323,
+      "cc2c": 324,
+      "ncnc43": 325,
+      "c4ccccc4": 326,
+      "c1ncc": 327,
+      "cc21": 328,
+      "32": 329,
+      "c21": 330,
+      "3OC": 331,
+      "cc2O": 332,
+      "c1ccn": 333,
+      "CCS": 334,
+      "2OP": 335,
+      "N1C": 336,
+      "NCCN": 337,
+      "cc1OC": 338,
+      "cc12": 339,
+      "c3ccccc23": 340,
+      "Nc2ccc": 341,
+      "2C3": 342,
+      "cc2c1": 343,
+      "Nc1ccccc1": 344,
+      "CCc1c": 345,
+      "c2ncn": 346,
+      "Nc1cc": 347,
+      "s1": 348,
+      "CC4": 349,
+      "OC2": 350,
+      "Cc2ccc": 351,
+      "9O": 352,
+      "c3C": 353,
+      "CCCCCCCCCCCCCCCCCCC": 354,
+      "CSCC": 355,
+      "cc2Cl": 356,
+      "6c": 357,
+      "CCCCCCCCCCCCCCCCCCCCCCCCCC": 358,
+      "Cc1": 359,
+      "CN1C": 360,
+      "CCCC1": 361,
+      "NCCS": 362,
+      "Cc2c": 363,
+      "NO": 364,
+      "Oc2c": 365,
+      "CCCN1C": 366,
+      "o2": 367,
+      "CCCCCCCCCCCCCCCCCCCCCC": 368,
+      "C5": 369,
+      "c2c1O": 370,
+      "cc3c": 371,
+      "c5ccc": 372,
+      "12O": 373,
+      "N3": 374,
+      ")-": 375,
+      "2CCC": 376,
+      "Oc2ccc": 377,
+      "c1cc2c": 378,
+      "oc2c1": 379,
+      "OC1O": 380,
+      "CO1": 381,
+      "C1N": 382,
+      "c2ccccc2c1": 383,
+      "C1CCC": 384,
+      "6CC": 385
+    },
+    "merges": [
+      [
+        "C",
+        "C"
+      ],
+      [
+        "c",
+        "c"
+      ],
+      [
+        "(",
+        "="
+      ],
+      [
+        "CC",
+        "CC"
+      ],
+      [
+        "C",
+        "O"
+      ],
+      [
+        "c",
+        "1"
+      ],
+      [
+        ")",
+        "("
+      ],
+      [
+        "CCCC",
+        "CCCC"
+      ],
+      [
+        "1",
+        "O"
+      ],
+      [
+        ")",
+        "="
+      ],
+      [
+        "c",
+        "2"
+      ],
+      [
+        "O",
+        "C"
+      ],
+      [
+        "CC",
+        "C"
+      ],
+      [
+        "n",
+        "c"
+      ],
+      [
+        "c1",
+        "cc"
+      ],
+      [
+        "2",
+        "O"
+      ],
+      [
+        "c",
+        "3"
+      ],
+      [
+        "c2",
+        "cc"
+      ],
+      [
+        "CO",
+        "P"
+      ],
+      [
+        "3",
+        "O"
+      ],
+      [
+        "1",
+        "C"
+      ],
+      [
+        "CC",
+        "N"
+      ],
+      [
+        "O",
+        "P"
+      ],
+      [
+        "C",
+        "1"
+      ],
+      [
+        "c1cc",
+        "c"
+      ],
+      [
+        "nc",
+        "3"
+      ],
+      [
+        "2",
+        "C"
+      ],
+      [
+        "4",
+        "O"
+      ],
+      [
+        "cc",
+        "c1"
+      ],
+      [
+        ")",
+        "(="
+      ],
+      [
+        "C",
+        "l"
+      ],
+      [
+        "cc",
+        "c"
+      ],
+      [
+        "CCCCCCCC",
+        "CCCCCCCC"
+      ],
+      [
+        "c1",
+        "c"
+      ],
+      [
+        "cc",
+        "1"
+      ],
+      [
+        "CCCC",
+        "C"
+      ],
+      [
+        "n",
+        "2"
+      ],
+      [
+        ")",
+        "/"
+      ],
+      [
+        "C",
+        "N"
+      ],
+      [
+        "CC",
+        "1"
+      ],
+      [
+        "c1cc",
+        "ccc1"
+      ],
+      [
+        "c2",
+        "c"
+      ],
+      [
+        "cc",
+        "2"
+      ],
+      [
+        "cc",
+        "c2"
+      ],
+      [
+        "1",
+        "CC"
+      ],
+      [
+        "3",
+        "C"
+      ],
+      [
+        "(",
+        "-"
+      ],
+      [
+        "c3",
+        "cc"
+      ],
+      [
+        "c",
+        "4"
+      ],
+      [
+        "c2cc",
+        "c"
+      ],
+      [
+        "CO",
+        "C"
+      ],
+      [
+        "n2",
+        "c"
+      ],
+      [
+        "5",
+        "O"
+      ],
+      [
+        "O",
+        "CC"
+      ],
+      [
+        "nc3",
+        "c"
+      ],
+      [
+        "N",
+        "C"
+      ],
+      [
+        "1O",
+        "P"
+      ],
+      [
+        "n2c",
+        "nc3c"
+      ],
+      [
+        "nc3",
+        "2"
+      ],
+      [
+        "nc",
+        "nc32"
+      ],
+      [
+        "N",
+        "CC"
+      ],
+      [
+        "c2cc",
+        "ccc2"
+      ],
+      [
+        "CCCC",
+        "CCC"
+      ],
+      [
+        "C",
+        "2"
+      ],
+      [
+        "CCCC",
+        "CC"
+      ],
+      [
+        "CO",
+        "c1cc"
+      ],
+      [
+        "c1",
+        "nc"
+      ],
+      [
+        "S",
+        "CCN"
+      ],
+      [
+        "3",
+        "CC"
+      ],
+      [
+        "(",
+        "/"
+      ],
+      [
+        "n",
+        "1"
+      ],
+      [
+        "1",
+        "2"
+      ],
+      [
+        "c3",
+        "c"
+      ],
+      [
+        "(",
+        "\\"
+      ],
+      [
+        "1",
+        "2C"
+      ],
+      [
+        "cc",
+        "3"
+      ],
+      [
+        "cc",
+        "c3"
+      ],
+      [
+        "C",
+        "S"
+      ],
+      [
+        "n",
+        "4"
+      ],
+      [
+        "C",
+        "c1c"
+      ],
+      [
+        "c1",
+        "O"
+      ],
+      [
+        "4",
+        "C"
+      ],
+      [
+        "1O",
+        "C"
+      ],
+      [
+        "c3",
+        "ccc"
+      ],
+      [
+        "c",
+        "nc"
+      ],
+      [
+        "CCCCCCCC",
+        "CCC"
+      ],
+      [
+        "6",
+        "O"
+      ],
+      [
+        "c",
+        "5"
+      ],
+      [
+        "2",
+        "CC"
+      ],
+      [
+        "S",
+        "C"
+      ],
+      [
+        "N",
+        "1"
+      ],
+      [
+        "C",
+        "3"
+      ],
+      [
+        "O",
+        "2"
+      ],
+      [
+        "c3cc",
+        "ccc3"
+      ],
+      [
+        "C",
+        "1C"
+      ],
+      [
+        "n",
+        "c2"
+      ],
+      [
+        "C",
+        "c1cc"
+      ],
+      [
+        "C",
+        "c1ccc"
+      ],
+      [
+        "O",
+        "1"
+      ],
+      [
+        "O",
+        "S"
+      ],
+      [
+        "N",
+        "CCC"
+      ],
+      [
+        "CCCCCCCC",
+        "CCCCCCC"
+      ],
+      [
+        "B",
+        "r"
+      ],
+      [
+        "CCCCCCCC",
+        "CC"
+      ],
+      [
+        "cc",
+        "4"
+      ],
+      [
+        "2",
+        "N"
+      ],
+      [
+        "1",
+        "N"
+      ],
+      [
+        "ccc1",
+        "2"
+      ],
+      [
+        "C",
+        "c1ccccc1"
+      ],
+      [
+        "5",
+        "c"
+      ],
+      [
+        "n",
+        "3"
+      ],
+      [
+        "CCCC",
+        "N"
+      ],
+      [
+        "c4",
+        "cc"
+      ],
+      [
+        "2",
+        "CO"
+      ],
+      [
+        "O",
+        "3"
+      ],
+      [
+        "n4",
+        "cnc"
+      ],
+      [
+        "c1",
+        "C"
+      ],
+      [
+        "CCC",
+        "N"
+      ],
+      [
+        "CCCCCCCC",
+        "CCCCCC"
+      ],
+      [
+        "n4cnc",
+        "5c"
+      ],
+      [
+        "CCCCCCCC",
+        "CCCCC"
+      ],
+      [
+        "CC",
+        "O"
+      ],
+      [
+        "c1",
+        "2"
+      ],
+      [
+        "nc",
+        "nc"
+      ],
+      [
+        "CCCCCCCC",
+        "C"
+      ],
+      [
+        "7",
+        "O"
+      ],
+      [
+        "cc",
+        "1C"
+      ],
+      [
+        "3",
+        "N"
+      ],
+      [
+        "3",
+        "COP"
+      ],
+      [
+        "CO",
+        "c1ccc"
+      ],
+      [
+        "2",
+        "OC"
+      ],
+      [
+        "CC",
+        "2"
+      ],
+      [
+        "OC",
+        "1"
+      ],
+      [
+        "O",
+        "CCN"
+      ],
+      [
+        "4",
+        "CC"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "C"
+      ],
+      [
+        "c2cc",
+        "ccc12"
+      ],
+      [
+        "c4",
+        "ccc"
+      ],
+      [
+        "2",
+        "c"
+      ],
+      [
+        "c1",
+        "n"
+      ],
+      [
+        "C",
+        "4"
+      ],
+      [
+        "c2",
+        "c1"
+      ],
+      [
+        "3O",
+        "P"
+      ],
+      [
+        "3",
+        "CO"
+      ],
+      [
+        "N",
+        "2"
+      ],
+      [
+        "ccc1",
+        "O"
+      ],
+      [
+        "C",
+        "1O"
+      ],
+      [
+        "N",
+        "S"
+      ],
+      [
+        "c2",
+        "nc"
+      ],
+      [
+        "CCCCCCCC",
+        "CCCC"
+      ],
+      [
+        "n",
+        "c1"
+      ],
+      [
+        "c1cc",
+        "cc"
+      ],
+      [
+        "o",
+        "c"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CC"
+      ],
+      [
+        "cc",
+        "1O"
+      ],
+      [
+        "5",
+        "CC"
+      ],
+      [
+        "1",
+        "CCC"
+      ],
+      [
+        "NCC",
+        "SC"
+      ],
+      [
+        "c4",
+        "c"
+      ],
+      [
+        "5",
+        "4"
+      ],
+      [
+        "4",
+        "c"
+      ],
+      [
+        "N1",
+        "CCC"
+      ],
+      [
+        "c1nc",
+        "nc2"
+      ],
+      [
+        "CC",
+        "OC"
+      ],
+      [
+        "CO",
+        "S"
+      ],
+      [
+        "ccc",
+        "4"
+      ],
+      [
+        "n4",
+        "ccc"
+      ],
+      [
+        "5",
+        "C"
+      ],
+      [
+        "N",
+        "c1ccc"
+      ],
+      [
+        "12",
+        "CC"
+      ],
+      [
+        "4",
+        "N"
+      ],
+      [
+        "3",
+        "CCC"
+      ],
+      [
+        "O",
+        "O"
+      ],
+      [
+        "c1nc",
+        "n2"
+      ],
+      [
+        "C1",
+        "CC"
+      ],
+      [
+        "ncnc",
+        "54"
+      ],
+      [
+        "2",
+        "3C"
+      ],
+      [
+        "nc",
+        "4"
+      ],
+      [
+        "O",
+        "c1ccc"
+      ],
+      [
+        "o",
+        "c2cc"
+      ],
+      [
+        "C",
+        "n1"
+      ],
+      [
+        "o",
+        "c3cc"
+      ],
+      [
+        "c1cc",
+        "c2c"
+      ],
+      [
+        "c2cc",
+        "cc"
+      ],
+      [
+        "c2cc",
+        "3"
+      ],
+      [
+        "OCC",
+        "OCC"
+      ],
+      [
+        "2",
+        "3"
+      ],
+      [
+        "C",
+        "2C"
+      ],
+      [
+        "c1ncnc2",
+        "c1ncn2"
+      ],
+      [
+        "o",
+        "1"
+      ],
+      [
+        "O",
+        "CO"
+      ],
+      [
+        "CCC",
+        "NC"
+      ],
+      [
+        "CCC",
+        "1"
+      ],
+      [
+        "Cc1c",
+        "nc"
+      ],
+      [
+        "c5",
+        "4"
+      ],
+      [
+        "N",
+        "CCCC"
+      ],
+      [
+        "2",
+        "1"
+      ],
+      [
+        "8",
+        "O"
+      ],
+      [
+        "cc",
+        "2C"
+      ],
+      [
+        "Cc1c",
+        "n"
+      ],
+      [
+        "c2",
+        "O"
+      ],
+      [
+        "nc",
+        "4O"
+      ],
+      [
+        "c2",
+        "C"
+      ],
+      [
+        "O",
+        "c1cc"
+      ],
+      [
+        "CO",
+        "c1c"
+      ],
+      [
+        "c2",
+        "n"
+      ],
+      [
+        "4",
+        "3C"
+      ],
+      [
+        "c2ccccc2",
+        "1"
+      ],
+      [
+        "2",
+        "C1"
+      ],
+      [
+        "4",
+        "3"
+      ],
+      [
+        "N",
+        "c1ncnc2c1ncn2"
+      ],
+      [
+        "CC",
+        "OP"
+      ],
+      [
+        "O",
+        "4"
+      ],
+      [
+        "c5",
+        "cc"
+      ],
+      [
+        "ccc2",
+        "3"
+      ],
+      [
+        "CC",
+        "3"
+      ],
+      [
+        "n3",
+        "cnc"
+      ],
+      [
+        "c",
+        "6"
+      ],
+      [
+        "N",
+        "2C"
+      ],
+      [
+        "c1",
+        "OC"
+      ],
+      [
+        "N",
+        "C1"
+      ],
+      [
+        "n3cnc",
+        "4c"
+      ],
+      [
+        "C",
+        "c2ccccc2"
+      ],
+      [
+        "2",
+        "1C"
+      ],
+      [
+        "cc",
+        "5"
+      ],
+      [
+        "C",
+        "4C"
+      ],
+      [
+        "n",
+        "c1O"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CCCCCCCC"
+      ],
+      [
+        "O",
+        "c2cc"
+      ],
+      [
+        "CN",
+        "1"
+      ],
+      [
+        "n3",
+        "ccc"
+      ],
+      [
+        "cc1C",
+        "l"
+      ],
+      [
+        "s",
+        "c"
+      ],
+      [
+        "c3",
+        "c2"
+      ],
+      [
+        "n4",
+        "cc"
+      ],
+      [
+        "3CCC",
+        "4"
+      ],
+      [
+        "c",
+        "n"
+      ],
+      [
+        "CCCC",
+        "C1"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CCCC"
+      ],
+      [
+        "COc1cc",
+        "2c"
+      ],
+      [
+        "5",
+        "N"
+      ],
+      [
+        "N",
+        "c1c"
+      ],
+      [
+        "cc2",
+        "c"
+      ],
+      [
+        "ncnc",
+        "43"
+      ],
+      [
+        "c4cc",
+        "ccc4"
+      ],
+      [
+        "c1n",
+        "cc"
+      ],
+      [
+        "cc2",
+        "1"
+      ],
+      [
+        "3",
+        "2"
+      ],
+      [
+        "c2",
+        "1"
+      ],
+      [
+        "3",
+        "OC"
+      ],
+      [
+        "cc",
+        "2O"
+      ],
+      [
+        "c1cc",
+        "n"
+      ],
+      [
+        "CC",
+        "S"
+      ],
+      [
+        "2O",
+        "P"
+      ],
+      [
+        "N",
+        "1C"
+      ],
+      [
+        "N",
+        "CCN"
+      ],
+      [
+        "cc",
+        "1OC"
+      ],
+      [
+        "cc1",
+        "2"
+      ],
+      [
+        "c3cc",
+        "ccc23"
+      ],
+      [
+        "N",
+        "c2ccc"
+      ],
+      [
+        "2C",
+        "3"
+      ],
+      [
+        "cc2",
+        "c1"
+      ],
+      [
+        "N",
+        "c1ccccc1"
+      ],
+      [
+        "CC",
+        "c1c"
+      ],
+      [
+        "c2nc",
+        "n"
+      ],
+      [
+        "N",
+        "c1cc"
+      ],
+      [
+        "s",
+        "1"
+      ],
+      [
+        "CC",
+        "4"
+      ],
+      [
+        "OC",
+        "2"
+      ],
+      [
+        "C",
+        "c2ccc"
+      ],
+      [
+        "9",
+        "O"
+      ],
+      [
+        "c3",
+        "C"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CCC"
+      ],
+      [
+        "CS",
+        "CC"
+      ],
+      [
+        "cc2C",
+        "l"
+      ],
+      [
+        "6",
+        "c"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CCCCCCCCCC"
+      ],
+      [
+        "C",
+        "c1"
+      ],
+      [
+        "CN",
+        "1C"
+      ],
+      [
+        "CCCC",
+        "1"
+      ],
+      [
+        "NCC",
+        "S"
+      ],
+      [
+        "C",
+        "c2c"
+      ],
+      [
+        "N",
+        "O"
+      ],
+      [
+        "O",
+        "c2c"
+      ],
+      [
+        "CCCN",
+        "1C"
+      ],
+      [
+        "o",
+        "2"
+      ],
+      [
+        "CCCCCCCCCCCCCCCC",
+        "CCCCCC"
+      ],
+      [
+        "C",
+        "5"
+      ],
+      [
+        "c2",
+        "c1O"
+      ],
+      [
+        "cc3",
+        "c"
+      ],
+      [
+        "c5",
+        "ccc"
+      ],
+      [
+        "1",
+        "2O"
+      ],
+      [
+        "N",
+        "3"
+      ],
+      [
+        ")",
+        "-"
+      ],
+      [
+        "2",
+        "CCC"
+      ],
+      [
+        "O",
+        "c2ccc"
+      ],
+      [
+        "c1cc",
+        "2c"
+      ],
+      [
+        "o",
+        "c2c1"
+      ],
+      [
+        "OC",
+        "1O"
+      ],
+      [
+        "CO",
+        "1"
+      ],
+      [
+        "C1",
+        "N"
+      ],
+      [
+        "c2ccccc2",
+        "c1"
+      ],
+      [
+        "C1",
+        "CCC"
+      ],
+      [
+        "6",
+        "CC"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+venv
+*.png
+*.csv
+*.parquet
+core
+checkpoints
+images
+*.dat
+.env
+.cometml-runs
+__pycache__
+*.npy
+*.pt
