@@ -4,6 +4,39 @@ import torch.nn as nn
 import math
 
 
+class NormalizedLinear(nn.Module):
+    """
+    Linear with L2-normalized rows of W and a learnable scalar scale.
+        logits = scale * (x @ normalize(W).T) + bias
+
+    Each output's contribution is determined by the *direction* of W[i], not its
+    magnitude, so frequent tokens can no longer win argmax by ballooning their
+    embedding norm. The scalar `scale` (learned via log-parameterization to keep
+    it positive) sets softmax sharpness; init=10 gives reasonable confidence.
+    """
+
+    def __init__(self, in_features, out_features, bias=True, init_scale=10.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        nn.init.normal_(self.weight, std=0.02)
+
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.register_parameter("bias", None)
+
+        self.log_logit_scale = nn.Parameter(torch.tensor(math.log(init_scale)))
+
+    def forward(self, x):
+        w = F.normalize(self.weight, dim=-1)
+        out = F.linear(x, w) * self.log_logit_scale.exp()
+        if self.bias is not None:
+            out = out + self.bias
+        return out
+
 
 class TimeEmbeddings(nn.Module):
     def __init__(self, config):

@@ -71,18 +71,18 @@ class Trainer(ABC):
     
         # optimizer = torch.optim.AdamW(self.model.parameters(), lr=training_config.lr)#self.model.get_optimizer()
         configure_optimizers = self.model.module.configure_optimizers if hasattr(self.model, "module") else self.model.configure_optimizers
-        optimizer = configure_optimizers(training_config.weight_decay, training_config.learning_rate, training_config.device_type, master_process=training_config.master_process)
+        optimizer = configure_optimizers(training_config.optimiser.weight_decay, training_config.lr.learning_rate, training_config.hardware.device_type, master_process=training_config.ddp.master_process)
 
         use_fp16_scaler = (
-            training_config.use_mp
+            training_config.hardware.use_mp
             and torch.cuda.is_available()
-            and training_config.mixed_dtype == torch.float16
+            and training_config.hardware.mixed_dtype == torch.float16
         )
         if use_fp16_scaler:
             from torch.amp import GradScaler
-            scaler = GradScaler(device=training_config.device)
+            scaler = GradScaler(device=training_config.hardware.device)
 
-        grad_accum_steps = training_config.grad_accum_steps or 1
+        grad_accum_steps = training_config.data.grad_accum_steps or 1
 
         optimizer.zero_grad(set_to_none=True)
         micro_step = 0
@@ -92,20 +92,20 @@ class Trainer(ABC):
         self.model.train()
         total_step = 0
 
-        for epoch in range(training_config.num_epochs):
-            if training_config.sampler is not None:
-                training_config.sampler.set_epoch(epoch)
+        for epoch in range(training_config.schedule.num_epochs):
+            if training_config.data.sampler is not None:
+                training_config.data.sampler.set_epoch(epoch)
 
             ran_validation = False
 
             for step, batch in enumerate(dataloader):
                 
-                if val_dataloader is not None and total_step>0 and total_step % training_config.validation_step == 0 and not ran_validation:
+                if val_dataloader is not None and total_step>0 and total_step % training_config.schedule.validation_step == 0 and not ran_validation:
                     ran_validation = True
-                    training_config.val_sampler.set_epoch(epoch)
+                    training_config.data.val_sampler.set_epoch(epoch)
                     val_metrics = self.evaluate(val_dataloader, total_step, training_config)
 
-                    if training_config.master_process and val_metrics:
+                    if training_config.ddp.master_process and val_metrics:
                         parts = [f"VAL step {total_step:5d}"]
                         if "loss" in val_metrics:
                             parts.append(f"loss: {val_metrics['loss'].item():.6f}")
@@ -120,13 +120,13 @@ class Trainer(ABC):
                             payload = {f"{prefix}_{key}": value.item() for key, value in val_metrics.items()}
                             training_config.exp.log_metrics(payload, step=total_step)
 
-                    if training_config.ddp:
+                    if training_config.ddp.ddp:
                         dist.barrier()
 
                 for key in batch.keys():
-                    batch[key] = batch[key].to(training_config.device, non_blocking=True)
+                    batch[key] = batch[key].to(training_config.hardware.device, non_blocking=True)
 
-                if training_config.ddp:
+                if training_config.ddp.ddp:
                     self.model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
 
                 losses = self.get_loss(batch, training_config)
@@ -149,15 +149,15 @@ class Trainer(ABC):
                 if micro_step % grad_accum_steps != 0:
                     continue                                # accumulate more
                 
-                training_config.decoder_pretrain_steps -= 1
+                training_config.schedule.decoder_pretrain_steps -= 1
                 ran_validation = False
                 # ---- optimizer step boundary ----
                 norm = None
-                if training_config.max_grad_norm is not None:
+                if training_config.optimiser.max_grad_norm is not None:
                     if use_fp16_scaler:
                         scaler.unscale_(optimizer)
                     norm = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), training_config.max_grad_norm
+                        self.model.parameters(), training_config.optimiser.max_grad_norm
                     )
 
                 lr = self.get_lr(total_step, training_config)
@@ -171,23 +171,24 @@ class Trainer(ABC):
                     optimizer.step()
 
                 optimizer.zero_grad(set_to_none=True)
+                micro_step = 0
 
-                if training_config.device_type == "cuda":
+                if training_config.hardware.device_type == "cuda":
                     torch.cuda.synchronize() # wait for the GPU to finish work
                 
                 # if training_config.ddp:
                 #     dist.all_reduce(accum_loss, op=dist.ReduceOp.AVG)
-                reduced = reduce_loss_dict(accum_losses, ddp=training_config.ddp)
+                reduced = reduce_loss_dict(accum_losses, ddp=training_config.ddp.ddp)
 
                 t1 = time.time()
                 dt = t1 - t0 # time difference in seconds
-                tokens_processed = training_config.batch_size * training_config.seq_len  * grad_accum_steps * training_config.ddp_world_size
+                tokens_processed = training_config.data.batch_size * training_config.data.seq_len  * grad_accum_steps * training_config.ddp.ddp_world_size
                 tokens_per_sec = tokens_processed / dt
                 norm_str = f"{norm:.4f}" if norm is not None else "n/a"
                 # if training_config.master_process:
                 #     print(f"step {step:5d} | loss: {accum_loss.item():.6f} | lr: {lr:.6f} | norm: {norm_str} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
                 
-                if training_config.master_process:
+                if training_config.ddp.master_process:
                     norm_str = f"{norm:.4f}" if norm is not None else "n/a"
                     # Build "k: value" pairs in insertion order from `reduced`, headlining `loss`.
                     parts = [f"step {total_step:5d}"]
@@ -217,7 +218,7 @@ class Trainer(ABC):
                 t0 = time.time()
                 total_step += 1
 
-            if epoch > 0  and training_config.master_process and (epoch % training_config.epoch_save_checkpoint == 0 or epoch+1==training_config.num_epochs):
+            if epoch > 0  and training_config.ddp.master_process and (epoch % training_config.schedule.epoch_save_checkpoint == 0 or epoch+1==training_config.schedule.num_epochs):
                 path = os.path.join('./checkpoints', training_config.run_name, str(epoch))
                 os.makedirs(path, exist_ok=True)
                 
@@ -243,7 +244,7 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
 
         token_embeddings = embed(token_ids)
 
-        sampling_noise_std = training_config.sampling_noise_std or 0.25
+        sampling_noise_std = training_config.sampling.sampling_noise_std or 0.25
         x0 = token_embeddings + torch.randn_like(token_embeddings)*sampling_noise_std
         
         batch_size, seq_len, emb_dim = x0.shape
@@ -263,9 +264,16 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
         if time.dim() == 3:
             time = time.squeeze(-1)   # (B, 1, 1) -> (B,1)
 
+        if training_config.regime == 'epsilon':
+            target = noise
+        elif training_config.regime == 'x':
+            target = x0
+        else:
+            raise ValueError(f'Incorrect training regime: {training_config.regime}. Expected to be "epsilon" or "x"')
+
         attn_mask = None
-        if training_config.use_mp:
-            with torch.autocast(device_type=training_config.device_type, dtype=training_config.mixed_dtype):
+        if training_config.hardware.use_mp:
+            with torch.autocast(device_type=training_config.hardware.device_type, dtype=training_config.hardware.mixed_dtype):
                 eps_theta = self.model(input_embeddings=x, time=time, attention_mask=attn_mask)
         else:
             eps_theta = self.model(input_embeddings=x, time=time, attention_mask=attn_mask)
@@ -284,13 +292,17 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
         # # mse_loss = (mse_per_pos * loss_mask).sum() / n_valid
         # mse_per_sample = (mse_per_pos*loss_mask).sum(-1) / n_valid #(B,)
         # mse_loss = mse_per_sample.mean()
-        mse_loss = ((eps_theta - noise) ** 2).mean()
+        mse_loss = ((eps_theta - target) ** 2).mean()
 
 
         # ----- Denoise to predicted x0 -----
         # alpha = self.path.alpha(t)                                 # (B, 1, 1)
-        alpha = alpha.clamp(min=training_config.eps)                                 # (B, 1, 1)
-        x0_hat = (x - beta * eps_theta) / alpha                    # (B, L, C)
+        alpha = alpha.clamp(min=training_config.optimiser.eps)      # (B, 1, 1)
+
+        if training_config.regime == 'epsilon':
+            x0_hat = (x - beta * eps_theta) / alpha
+        elif training_config.regime == 'x':
+            x0_hat = eps_theta # (B, L, C)
 
 
         # ----- Reconstruction MSE (only at low-noise / high-alpha steps) -----
@@ -310,43 +322,29 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
         # logits = get_logits(x0) # (B, L, V)
 
         # ce_sample_mask = (alpha > training_config.alpha_threshold).squeeze(-1).float() #(B,L)
-        ce_sample_mask = (alpha > training_config.alpha_threshold).squeeze(-1).squeeze(-1) #(B)
+        ce_sample_mask = (alpha > training_config.optimiser.alpha_threshold).squeeze(-1).squeeze(-1) #(B)
 
         if ce_sample_mask.any():
             ce_loss = F.cross_entropy(
                 logits[ce_sample_mask].reshape(-1, logits.size(-1)),
                 token_ids[ce_sample_mask].reshape(-1),
-                ignore_index=training_config.pad_idx,
-                label_smoothing=training_config.label_smoothing,
+                ignore_index=training_config.data.pad_idx,
+                label_smoothing=training_config.optimiser.label_smoothing,
                 reduction='mean',
-                weight=training_config.class_weigths
+                weight=training_config.class_weight.class_weights
             )
         else:
             ce_loss = torch.tensor(0.0, device=logits.device)
 
-        # ce_per_pos = F.cross_entropy(
-        #         logits.view(-1, logits.size(-1)), token_ids.view(-1),
-        #         ignore_index=training_config.pad_idx,
-        #         label_smoothing=training_config.label_smoothing, 
-        #         reduction='none',
-        #         weight=training_config.class_weigths
-        #     ).view(*token_ids.shape)
-
-        # ce_loss_mask = loss_mask * ce_sample_mask
-        # n_valid_tokens = loss_mask.sum().clamp(min=1)
-        # ce_loss = (ce_per_pos * loss_mask).sum() / n_valid_tokens
-
-        # n_valid_tokens = ce_loss_mask.sum().clamp(min=1)
-        # ce_loss = (ce_per_pos * ce_loss_mask).sum() / n_valid_tokens
-
         alpha_flat = alpha.squeeze(-1).squeeze(-1)  # (B,)
         metrics = {}
+        
 
         # ----- Accuracy -----
         with torch.no_grad():
             pred_ids = logits.argmax(-1)  # (B, L)
-            correct = (pred_ids == token_ids) & (token_ids != training_config.pad_idx) # (B, L)
-            valid = (token_ids != training_config.pad_idx)
+            correct = (pred_ids == token_ids) & (token_ids != training_config.data.pad_idx) # (B, L)
+            valid = (token_ids != training_config.data.pad_idx)
             metrics['token_acc'] = correct.sum() / valid.sum().clamp(min=1)
 
             for lo, hi, name in [(0.0, 0.3, 'high_noise'),
@@ -363,25 +361,34 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
                     sel_valid = valid[bucket]
                     metrics[f'token_acc_{name}'] = sel_correct.sum() / sel_valid.sum().clamp(min=1)
                 else:
-                    metrics[f'ce_{name}'] = torch.tensor(0.0)
-                    metrics[f'mse_{name}'] = torch.tensor(0.0)
-                    metrics[f'token_acc_{name}'] = torch.tensor(0.0)
+                    metrics[f'ce_{name}'] = torch.tensor(0.0, device=x.device)
+                    metrics[f'mse_{name}'] = torch.tensor(0.0, device=x.device)
+                    metrics[f'token_acc_{name}'] = torch.tensor(0.0, device=x.device)
 
             emb = self.model.token_embedding.weight if not hasattr(self.model, 'module') else self.model.module.token_embedding.weight
             emb_norms = emb.norm(dim=-1)
             metrics['emb_norm_mean'] = emb_norms.mean()
             metrics['emb_norm_std'] = emb_norms.std()
-            metrics['emb_norm_ratio'] = emb_norms.max() / emb_norms.min().clamp(min=1e-6)
-                    
             metrics['eps_theta_norm'] = eps_theta.detach().norm(dim=-1).mean()
+
+            # Treat tokens with norm < 1e-3 as dead (never updated / WD-collapsed)
+            # and exclude them from the ratio; report the count separately.
+            alive = emb_norms > 1e-3
+            metrics['emb_n_dead'] = (~alive).sum().float()
+            if alive.any():
+                alive_norms = emb_norms[alive]
+                metrics['emb_norm_ratio'] = alive_norms.max() / alive_norms.min().clamp(min=1e-6)
+            else:
+                metrics['emb_norm_ratio'] = torch.tensor(0.0, device=emb.device)
+                    
             # metrics['eps_theta_pad_norm'] = (eps_theta.detach().norm(dim=-1) * (1 - loss_mask)).sum() / (1 - loss_mask).sum().clamp(min=1)
             # metrics['eps_theta_real_norm'] = (eps_theta.detach().norm(dim=-1) * loss_mask).sum() / loss_mask.sum().clamp(min=1)
 
         # ----- Total -----
-        lambda_ce = training_config.lambda_ce or 1.0
-        lambda_mse = training_config.lambda_mse or 1.0
+        lambda_ce = training_config.optimiser.lambda_ce or 1.0
+        lambda_mse = training_config.optimiser.lambda_mse or 1.0
 
-        if training_config.decoder_pretrain_steps>0:
+        if training_config.schedule.decoder_pretrain_steps>0:
             lambda_mse = 0.0
 
         loss = lambda_mse*mse_loss + lambda_ce * ce_loss + lambda_mse*mse_loss_t0        
@@ -401,41 +408,41 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
 
         for val_batch in val_dataloader:
             for k in val_batch:
-                val_batch[k] = val_batch[k].to(training_config.device, non_blocking=True)
+                val_batch[k] = val_batch[k].to(training_config.hardware.device, non_blocking=True)
 
             losses = self.get_loss(val_batch, training_config)
             for k, v in losses.items():
                 if not torch.is_tensor(v):
-                    v = torch.as_tensor(float(v), device=training_config.device)
-                sums[k] = sums.get(k, torch.zeros((), device=training_config.device)) + v.detach()
+                    v = torch.as_tensor(float(v), device=training_config.hardware.device)
+                sums[k] = sums.get(k, torch.zeros((), device=training_config.hardware.device)) + v.detach()
             n_batches += 1
 
         # local mean over batches on this rank
         local_mean = {k: v / max(n_batches, 1) for k, v in sums.items()}
 
-        if training_config.sample_examples and step % training_config.sample_step == 0:
+        if training_config.sampling.sample_examples and step % training_config.sampling.sample_step == 0:
             from dimol.diffusion.diff_eqs import LearnedScoreSDE
             from dimol.models.models import  DenoiserModel
             from dimol.tokenizer.smiles_tokenizer import SmilesTokenizer
             from dimol.diffusion.simulators import EulerMaruyamaSimulator
 
             tokenizer = SmilesTokenizer.load(training_config.path_to_tokenizer)
-            score_model = DenoiserModel(self.model, self.path)
-            sde = LearnedScoreSDE(self.path, score_model, training_config.sampling_variance)
+            score_model = DenoiserModel(self.model, self.path, regime=training_config.regime)
+            sde = LearnedScoreSDE(self.path, score_model, training_config.sampling.sampling_variance)
             simulator = EulerMaruyamaSimulator(sde)
 
-            x0 = self.path.p_simple.sample(training_config.num_samples, seed=training_config.ddp_rank)
+            x0 = self.path.p_simple.sample(training_config.sampling.num_samples, seed=training_config.ddp.ddp_rank)
 
             # eps = 1e-3
             # ts = torch.linspace(eps, 1 - eps, training_config.num_samling_timesteps).view(1, training_config.num_samling_timesteps, 1, 1).expand(training_config.num_samples, -1, -1, -1).to(training_config.device) # (num_samples, nts, 1)
-            ts = torch.linspace(1e-4, 0.999, training_config.num_samling_timesteps).view(1, training_config.num_samling_timesteps, 1, 1).expand(training_config.num_samples, -1, -1, -1).to(training_config.device) # (num_samples, nts, 1)
+            ts = torch.linspace(1e-4, 0.999, training_config.sampling.num_sampling_timesteps).view(1, training_config.sampling.num_sampling_timesteps, 1, 1).expand(training_config.sampling.num_samples, -1, -1, -1).to(training_config.hardware.device) # (num_samples, nts, 1)
             xts = simulator.simulate(x0, ts) 
 
             get_logits = self.model.module.out_proj if hasattr(self.model, "module") else self.model.out_proj
             probs = get_logits(xts).softmax(-1).detach().cpu()
             ids = probs.argmax(-1).tolist()
 
-            smiles_list = tokenizer.decode_batch(ids)
+            smiles_list = tokenizer.decode_batch(ids, special_decode=True)
 
             try:
                 from rdkit import Chem
@@ -449,27 +456,30 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
                 if Chem.MolFromSmiles(s) is not None:
                     n_decoded_valid += 1
             
-            validity = torch.tensor(n_decoded_valid/len(smiles_list))
+            validity = torch.tensor(
+                n_decoded_valid / len(smiles_list),
+                device=training_config.hardware.device  # ← pin to correct device
+            )
             local_mean.update({'validity': validity})
             print(smiles_list[:10])
 
         # one all-reduce across ranks at the end
-        reduced = reduce_loss_dict(local_mean, ddp=training_config.ddp)
+        reduced = reduce_loss_dict(local_mean, ddp=training_config.ddp.ddp)
         self.model.train()
         return reduced
 
     def get_lr(self, it, training_config):
         # 1) linear warmup for warmup_iters steps
-        if it < training_config.warmup_steps:
-            return training_config.max_lr * (it+1) / training_config.warmup_steps
+        if it < training_config.lr.warmup_steps:
+            return training_config.lr.max_lr * (it+1) / training_config.lr.warmup_steps
         # 2) if it > lr_decay_iters, return min learning rate
-        if it > training_config.max_steps:
-            return training_config.min_lr
+        if it > training_config.schedule.max_steps:
+            return training_config.lr.min_lr
         # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - training_config.warmup_steps) / (training_config.max_steps - training_config.warmup_steps)
+        decay_ratio = (it - training_config.lr.warmup_steps) / (training_config.schedule.max_steps - training_config.lr.warmup_steps)
         assert 0 <= decay_ratio <= 1
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
-        return training_config.min_lr + coeff * (training_config.max_lr - training_config.min_lr)
+        return training_config.lr.min_lr + coeff * (training_config.lr.max_lr - training_config.lr.min_lr)
 
 
 

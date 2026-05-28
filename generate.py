@@ -66,7 +66,7 @@ class TrainingConfig:
     run_name: str = 'v1'
     sample_examples: bool = True
     sample_step: int = 500
-    num_samples: int = 12
+    num_samples: int = 200
     sampling_variance: float = 1.0
     num_samling_timesteps: int = 300
     path_to_tokenizer: str = Path("data/smiles_bpe.json")
@@ -83,7 +83,7 @@ class TrainingConfig:
 training_config = TrainingConfig(use_mp=True, mixed_dtype=torch.float16, compile_model=False)
 
 device = training_config.device
-model = DiffusionTransformer.from_pretrained(load_dir='checkpoints/v7/499', map_location=device)
+model = DiffusionTransformer.from_pretrained(load_dir='checkpoints/v11/500', map_location=device)
 
 print('loaded model')
 
@@ -95,7 +95,7 @@ path = GaussianConditionalProbabilityPath(
     beta = CosineBeta(device)).to(device)
 
 tokenizer = SmilesTokenizer.load(training_config.path_to_tokenizer)
-score_model = DenoiserModel(model, path)
+score_model = DenoiserModel(model, path, 'epsilon')
 sde = LearnedScoreSDE(path, score_model, training_config.sampling_variance)
 simulator = EulerMaruyamaSimulator(sde)
 
@@ -103,14 +103,14 @@ x0 = path.p_simple.sample(training_config.num_samples, seed=training_config.ddp_
 
 print('generating')
 eps = 1e-3
-ts = torch.linspace(0.001, 0.900, training_config.num_samling_timesteps).view(1, training_config.num_samling_timesteps, 1, 1).expand(training_config.num_samples, -1, -1, -1).to(training_config.device) # (num_samples, nts, 1)
+ts = torch.linspace(0.001, 0.999, training_config.num_samling_timesteps).view(1, training_config.num_samling_timesteps, 1, 1).expand(training_config.num_samples, -1, -1, -1).to(training_config.device) # (num_samples, nts, 1)
 xts = simulator.simulate(x0, ts, use_bar=True) 
 
 get_logits = model.module.out_proj if hasattr(model, "module") else model.out_proj
 probs = get_logits(xts).softmax(-1).detach().cpu()
 ids = probs.argmax(-1).tolist()
 
-smiles_list = tokenizer.decode_batch(ids)
+smiles_list = tokenizer.decode_batch(ids, special_decode=True)
 smiles_list_raw = tokenizer.decode_batch(ids, skip_special_tokens=False)
 
 from rdkit import Chem
@@ -119,8 +119,9 @@ RDLogger.DisableLog("rdApp.*")
 
 n_decoded_valid = 0
 for s in smiles_list:
-    if Chem.MolFromSmiles(s) is not None:
+    if len(s)>0 and Chem.MolFromSmiles(s) is not None:
         n_decoded_valid += 1
 
 validity = torch.tensor(n_decoded_valid/len(smiles_list))
-print('\n'.join(smiles_list_raw))
+print(f"\n\nVALIDITY: {validity.item()*100}%\n\n")
+print('\n'.join(smiles_list_raw[:20]))

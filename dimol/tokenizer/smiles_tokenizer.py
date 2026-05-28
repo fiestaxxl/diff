@@ -234,13 +234,37 @@ class SmilesTokenizer:
             toks = [t for t in toks if t is not None and t not in specials]
         return "".join(t for t in toks if t is not None)
 
+    def special_decode(self, ids, skip_special_tokens=True):
+        eos_id = self.eos_id
+        toks = []
+        saw_bos = False
+        for i in ids:
+            t = self._tok.id_to_token(i)
+            if t is None: continue
+            if i == self.bos_id:
+                if saw_bos:           # second <bos> = stop
+                    break
+                saw_bos = True
+                if skip_special_tokens: continue
+            if i == eos_id:           # stop at first <eos>
+                if not skip_special_tokens: toks.append(t)
+                break
+            if skip_special_tokens and t in set(self.SPECIAL_TOKENS):
+                continue
+            toks.append(t)
+        return "".join(toks)
+
     def decode_batch(
         self,
         batch_ids: List[List[int]],
         skip_special_tokens: bool = True,
+        special_decode: bool = False
     ) -> List[str]:
         return [
             self.decode(ids, skip_special_tokens=skip_special_tokens)
+            for ids in batch_ids
+        ] if not special_decode else [
+            self.special_decode(ids, skip_special_tokens=skip_special_tokens)
             for ids in batch_ids
         ]
 

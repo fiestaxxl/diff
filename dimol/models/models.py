@@ -1,5 +1,5 @@
 
-from dimol.models.nn import TimeEmbeddings, Modulation, TextEmbeddings, RoPE1D, TransformerEncoderBlock, TransformerDecoderBlock, OutLayer, FeedForward
+from dimol.models.nn import TimeEmbeddings, Modulation, TextEmbeddings, RoPE1D, TransformerEncoderBlock, TransformerDecoderBlock, OutLayer, FeedForward, NormalizedLinear
 
 import json
 import math
@@ -78,7 +78,8 @@ class DiffusionTransformer(nn.Module):
 
         self.noise_head = OutLayer(config)
 
-        self.out_proj = nn.Linear(config.emb_dim, config.vocab_size, bias=True)
+        # self.out_proj = nn.Linear(config.emb_dim, config.vocab_size, bias=True)
+        self.out_proj = NormalizedLinear(config.emb_dim, config.vocab_size, bias=True)
         # self.out_proj.weight = self.token_embedding.weight
 
         self.apply(self._init_params)
@@ -122,7 +123,13 @@ class DiffusionTransformer(nn.Module):
             if id(p) in seen:
                 continue
             seen.add(id(p))
-            (decay_params if p.dim() >= 2 else nodecay_params).append(p)
+            if "token_embedding" in n:
+                nodecay_params.append(p)
+            elif p.dim() >= 2:
+                decay_params.append(p)
+            else:
+                nodecay_params.append(p)
+            # (decay_params if p.dim() >= 2 else nodecay_params).append(p)
 
         optim_groups = [
             {"params": decay_params,   "weight_decay": weight_decay},
@@ -481,19 +488,28 @@ class DiffusionTransformer(nn.Module):
 
 
 class DenoiserModel(nn.Module):
-    def __init__(self, eps_model, path):
+    def __init__(self, eps_model, path, regime='epsilon'):
         super().__init__()
         self.eps_model = eps_model
         self.path = path
+        self.regime = regime
 
     def forward(self, x, t, **kwargs):
+        alpha_t = torch.clamp(self.path.alpha(t), min=1e-3)
+        beta_t  = torch.clamp(self.path.beta(t),  min=1e-3)
+        t_in    = t.squeeze(-1)
+        pred    = self.eps_model(x, t_in, **kwargs)
 
-        beta_t = torch.clamp(self.path.beta(t), min=1e-3)
-        t = t.squeeze(-1)
-        eps_theta = self.eps_model(x, t, **kwargs)
-        score = -eps_theta / beta_t
+        if self.regime == 'epsilon':
+            x0_pred = (x - beta_t * pred) / alpha_t
+        elif self.regime == 'x':
+            x0_pred = pred
+        else:
+            raise ValueError(f"Expected regime to be 'epsilon' or 'x', got {self.regime}")
+
+        score = (alpha_t * x0_pred - x) / (beta_t ** 2)
         return score
-    
+
     # def get_logits(self, x):
     #     return self.eps_model.get_logits(x)
 
