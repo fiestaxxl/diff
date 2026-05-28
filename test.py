@@ -6,7 +6,8 @@ from dimol.tokenizer.smiles_tokenizer import SmilesTokenizer
 from dimol.diffusion.distributions import GaussianMixture
 
 device = 'cuda'
-model = DiffusionTransformer.from_pretrained(load_dir='checkpoints/v7/499', map_location=device)
+regime = 'epsilon'
+model = DiffusionTransformer.from_pretrained(load_dir='checkpoints/v11/500', map_location=device)
 model.eval()
 tok = SmilesTokenizer.load("data/smiles_bpe.json")
 vocab = tok.get_vocab()
@@ -25,6 +26,16 @@ path = GaussianConditionalProbabilityPath(
     alpha=CosineAlpha(device),
     beta=CosineBeta(device)
 ).to(device)
+
+
+def get_noise_x_hat(pred, x_t, alpha, beta, regime):
+    if regime == 'epsilon':
+        x0_hat = (x_t - beta * pred) / alpha.clamp(min=1e-3)
+        return pred, x0_hat
+    else:
+        target_eps = (x_t - alpha * pred) / beta.clamp(min=1e-3)
+        return target_eps, pred
+
 
 
 print(f"=== Tying check ===")
@@ -64,6 +75,8 @@ with torch.no_grad():
     alpha = path.alpha(t_one[..., None])
     beta = path.beta(t_one[..., None])
     x0_hat = (real_embed - beta * eps) / alpha.clamp(min=1e-4)
+
+    eps, x0_hat = get_noise_x_hat(eps, real_embed, alpha, beta, regime=regime)
     logits = model.out_proj(x0_hat)
     decoded = logits.argmax(-1)
     t1_match = (real_ids[0][real_pos_mask] == decoded[0][real_pos_mask]).float().mean()
@@ -82,12 +95,13 @@ with torch.no_grad():
     eps_pred = model(input_embeddings=x_t, time=t_high, attention_mask=mask)
     
     # check noise prediction quality
+    eps_pred, x0_hat_high = get_noise_x_hat(eps_pred, x_t, path.alpha(t_high[..., None]), path.beta(t_high[..., None]), regime=regime)
     noise_mse = ((eps_pred - noise) ** 2).mean().item()
     print(f"  noise prediction MSE (should be ~0.4 if model learned): {noise_mse:.4f}")
     print(f"eps sum here: {eps_pred.sum()} vs noise: {noise.sum()}")
     
     # decode
-    x0_hat_high = (x_t - path.beta(t_high[..., None]) * eps_pred) / path.alpha(t_high[..., None]).clamp(min=1e-4)
+    # x0_hat_high = (x_t - path.beta(t_high[..., None]) * eps_pred) / path.alpha(t_high[..., None]).clamp(min=1e-4)
     logits_high = model.out_proj(x0_hat_high)
     decoded_high = logits_high.argmax(-1)
     t_high_match = (real_ids[0][real_pos_mask] == decoded_high[0][real_pos_mask]).float().mean()
@@ -101,10 +115,12 @@ with torch.no_grad():
     noise = torch.randn_like(real_embed)
     x_t = path.alpha(t_mid[..., None]) * real_embed + path.beta(t_mid[..., None]) * noise
     eps_pred = model(input_embeddings=x_t, time=t_mid, attention_mask=mask)
+
+    eps_pred, x0_hat_mid = get_noise_x_hat(eps_pred, x_t, path.alpha(t_mid[..., None]), path.beta(t_mid[..., None]), regime=regime)
     noise_mse = ((eps_pred - noise) ** 2).mean().item()
     print(f"  noise MSE: {noise_mse:.4f}")
     print(f"eps sum here: {eps_pred.sum()} vs noise: {noise.sum()}")
-    x0_hat_mid = (x_t - path.beta(t_mid[..., None]) * eps_pred) / path.alpha(t_mid[..., None]).clamp(min=1e-4)
+    # x0_hat_mid = (x_t - path.beta(t_mid[..., None]) * eps_pred) / path.alpha(t_mid[..., None]).clamp(min=1e-4)
     logits_mid = model.out_proj(x0_hat_mid)
     decoded_mid = logits_mid.argmax(-1)
     t_mid_match = (real_ids[0][real_pos_mask] == decoded_mid[0][real_pos_mask]).float().mean()
@@ -118,10 +134,12 @@ with torch.no_grad():
     noise = torch.randn_like(real_embed)
     x_t = path.alpha(t_high[..., None]) * real_embed + path.beta(t_high[..., None]) * noise
     eps_pred = model(input_embeddings=x_t, time=t_high, attention_mask=mask)
+
+    eps_pred, x0_hat_high = get_noise_x_hat(eps_pred, x_t, path.alpha(t_high[..., None]), path.beta(t_high[..., None]), regime=regime)
     noise_mse = ((eps_pred - noise) ** 2).mean().item()
     print(f"  noise MSE: {noise_mse:.4f}")
     print(f"eps sum here: {eps_pred.sum()} vs noise: {noise.sum()}")
-    x0_hat_high = (x_t - path.beta(t_high[..., None]) * eps_pred) / path.alpha(t_high[..., None]).clamp(min=1e-4)
+    # x0_hat_high = (x_t - path.beta(t_high[..., None]) * eps_pred) / path.alpha(t_high[..., None]).clamp(min=1e-4)
     logits_high = model.out_proj(x0_hat_high)
     decoded_high = logits_high.argmax(-1)
     t_high_match = (real_ids[0][real_pos_mask] == decoded_high[0][real_pos_mask]).float().mean()
