@@ -102,7 +102,8 @@ class Trainer(ABC):
                 
                 if val_dataloader is not None and total_step>0 and total_step % training_config.schedule.validation_step == 0 and not ran_validation:
                     ran_validation = True
-                    training_config.data.val_sampler.set_epoch(epoch)
+                    if training_config.data.val_sampler is not None:
+                        training_config.data.val_sampler.set_epoch(epoch)
                     val_metrics = self.evaluate(val_dataloader, total_step, training_config)
 
                     if training_config.ddp.master_process and val_metrics:
@@ -334,9 +335,26 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
                 weight=training_config.class_weight.class_weights
             )
         else:
-            ce_loss = torch.tensor(0.0, device=logits.device)
+            ce_loss = logits.sum() * 0.0
 
         alpha_flat = alpha.squeeze(-1).squeeze(-1)  # (B,)
+        probs_mask = alpha_flat>0.5
+        if probs_mask.any():
+            probs = logits[probs_mask].softmax(-1) # (B, L, V)
+            # paren balance: cumulative net parens must stay >= 0 and end at 0
+            delta   = (probs * training_config.paren_delta).sum(-1)                     # (B, L)
+            balance = delta.cumsum(dim=1)
+            paren_loss = F.relu(-balance).mean() + balance[:, -1].abs().mean()
+
+            # ring parity: each digit's expected count should be even
+            ring_exp = torch.einsum('blv,vd->bd', probs, training_config.ring_count)    # (B, 10)
+            ring_loss = (ring_exp - ring_exp.round()).pow(2).mean()     # ~0 when even
+
+            grammar_loss = paren_loss + ring_loss
+        else:
+            grammar_loss = logits.sum() * 0.0
+        
+        
         metrics = {}
         
 
@@ -387,13 +405,14 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
         # ----- Total -----
         lambda_ce = training_config.optimiser.lambda_ce or 1.0
         lambda_mse = training_config.optimiser.lambda_mse or 1.0
+        lambda_grammar = training_config.optimiser.lambda_grammar or 0.0
 
         if training_config.schedule.decoder_pretrain_steps>0:
             lambda_mse = 0.0
 
-        loss = lambda_mse*mse_loss + lambda_ce * ce_loss + lambda_mse*mse_loss_t0        
+        loss = lambda_mse*mse_loss + lambda_ce * ce_loss + lambda_mse*mse_loss_t0 + lambda_grammar * grammar_loss    
 
-        metrics.update({'loss':loss, 'mse_loss': mse_loss.detach(), 'ce_loss': ce_loss.detach(), 'mse_loss_t0': mse_loss_t0.detach()})
+        metrics.update({'loss':loss, 'mse_loss': mse_loss.detach(), 'ce_loss': ce_loss.detach(), 'mse_loss_t0': mse_loss_t0.detach(), 'grammar_loss': grammar_loss.detach()})
         return metrics #{'loss':loss, 'mse_loss': mse_loss, 'ce_loss': ce_loss, 'mse_loss_t0': mse_loss_t0}
 
     @torch.no_grad()
@@ -484,7 +503,190 @@ class ConditionalGaussianDenoiserTrainerLite(Trainer):
 
 
 
+class ARTrainer:
+    def __init__(self, model: nn.Module):
+        self.model = model
 
+    # ---------- core ----------
+    def get_loss(self, batch: dict, cfg) -> dict:
+        token_ids = batch["token_ids"]               # (B, L)
+        inp = token_ids[:, :-1]                       # (B, L-1)
+        tgt = token_ids[:, 1:]                        # (B, L-1)
+
+        if cfg.use_mp:
+            with torch.autocast(device_type=cfg.device_type, dtype=cfg.mixed_dtype):
+                logits = self.model(inp)  
+        else:
+            logits = self.model(inp)  
+
+
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            tgt.reshape(-1),
+            ignore_index=cfg.pad_idx,
+            label_smoothing=cfg.label_smoothing,
+        )
+        with torch.no_grad():
+            pred  = logits.argmax(-1)
+            valid = tgt != cfg.pad_idx
+            acc   = ((pred == tgt) & valid).sum().float() / valid.sum().clamp(min=1)
+            ppl   = loss.detach().exp()
+        return {"loss": loss, "token_acc": acc.detach(), "ppl": ppl}
+
+    def get_lr(self, step: int, cfg) -> float:
+        if step < cfg.warmup_steps:
+            return cfg.max_lr * (step + 1) / cfg.warmup_steps
+        if step > cfg.max_steps:
+            return cfg.min_lr
+        progress = (step - cfg.warmup_steps) / max(1, cfg.max_steps - cfg.warmup_steps)
+        coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return cfg.min_lr + coeff * (cfg.max_lr - cfg.min_lr)
+
+    # ---------- val ----------
+    @torch.no_grad()
+    def evaluate(self, val_loader, cfg) -> dict:
+        self.model.eval()
+        sums, n = {}, 0
+        for batch in val_loader:
+            for k in batch: 
+                batch[k] = batch[k].to(cfg.device, non_blocking=True)
+            losses = self.get_loss(batch, cfg)
+            for k, v in losses.items():
+                sums[k] = sums.get(k, torch.zeros((), device=cfg.device)) + v.detach()
+            n += 1
+        means   = {k: v / max(n, 1) for k, v in sums.items()}
+        reduced = reduce_loss_dict(means, ddp=cfg.ddp)
+        self.model.train()
+        return reduced
+
+    # ---------- train ----------
+    def train(self, train_loader, cfg, val_loader=None):
+        unwrap = lambda m: m.module if hasattr(m, "module") else m
+        optimizer = unwrap(self.model).configure_optimizers(
+            cfg.weight_decay, cfg.max_lr, cfg.device_type, cfg.master_process
+        )
+
+        use_fp16_scaler = (
+            cfg.use_mp
+            and torch.cuda.is_available()
+            and cfg.mixed_dtype == torch.float16
+        )
+
+        if use_fp16_scaler:
+            from torch.amp import GradScaler
+            scaler = GradScaler(device=cfg.device)
+
+
+        accum, micro, total_step = {}, 0, 0
+        t0 = time.time()
+        self.model.train()
+        optimizer.zero_grad(set_to_none=True)
+
+        for epoch in range(cfg.num_epochs):
+            if cfg.sampler is not None: 
+                cfg.sampler.set_epoch(epoch)
+            ran_val = False
+
+            for step, batch in enumerate(train_loader):
+
+                # ---- validation
+                if val_loader is not None and total_step > 0 and total_step % cfg.validation_step == 0 and not ran_val:
+                    ran_val = True
+                    if cfg.val_sampler is not None: 
+                        cfg.val_sampler.set_epoch(epoch)
+                    val = self.evaluate(val_loader, cfg)
+
+                    if cfg.master_process:
+                        msg = " | ".join(f"{k}: {v.item():.4f}" for k, v in val.items())
+                        print(f"VAL step {total_step:5d} | {msg}")
+
+                    if cfg.exp is not None:
+                        prefix = 'val'
+                        payload = {f"{prefix}_{key}": value.item() for key, value in val.items()}
+                        cfg.exp.log_metrics(payload, step=total_step)
+
+                # ---- batch -> device
+                for k in batch: 
+                    batch[k] = batch[k].to(cfg.device, non_blocking=True)
+
+                # ---- DDP sync flag (fixed, mirrors the diffusion-trainer fix)
+                if cfg.ddp:
+                    is_sync = ((micro + 1) % cfg.grad_accum_steps) == 0
+                    self.model.require_backward_grad_sync = is_sync
+
+                losses = self.get_loss(batch, cfg)
+                loss = losses["loss"] / cfg.grad_accum_steps
+                for k, v in losses.items():
+                    if not torch.is_tensor(v):
+                        v = torch.as_tensor(float(v), device=loss.device)
+                    accum[k] = accum.get(k, 0.0) + v.detach() / cfg.grad_accum_steps
+
+                if use_fp16_scaler:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+                    
+                micro += 1
+                if micro % cfg.grad_accum_steps != 0:
+                    continue
+
+                # ---- optimizer step
+                norm = None
+                if cfg.max_grad_norm is not None:
+                    if use_fp16_scaler:
+                        scaler.unscale_(optimizer)
+                    norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), cfg.max_grad_norm
+                    )    
+                
+                lr = self.get_lr(total_step, cfg)
+
+                for g in optimizer.param_groups: 
+                    g["lr"] = lr
+
+                if use_fp16_scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+
+                optimizer.zero_grad(set_to_none=True)
+                if cfg.device_type == "cuda": 
+                    torch.cuda.synchronize()
+
+                # ---- log
+                reduced = reduce_loss_dict(accum, ddp=cfg.ddp)
+                dt = time.time() - t0
+                tokens_processed = cfg.batch_size * cfg.seq_len  * cfg.grad_accum_steps * cfg.ddp_world_size
+                tokens_per_sec = tokens_processed / dt
+
+                if cfg.master_process:
+                    norm_str = f"{norm:.4f}" if norm is not None else "n/a"
+                    parts = [f"step {total_step:5d}"] \
+                          + [f"{k}: {v.item():.4f}" for k, v in reduced.items()] \
+                          + [f"lr: {lr:.6f}",
+                             f"norm: {norm:.4f}" if norm is not None else "norm: n/a",
+                             f"dt: {dt*1000:.1f}ms",
+                             f"tok/sec: {tokens_per_sec:.2f}"]
+                    print(" | ".join(parts))
+                    if cfg.exp is not None:
+                        prefix = 'train'
+                        payload = {f"{prefix}_{key}": value.item() for key, value in reduced.items()}
+                        payload.update({'lr': lr, 'norm': norm_str, 'dt': dt*1000, 'tok/sec': tokens_per_sec})
+                        cfg.exp.log_metrics(payload, step=total_step)
+
+                accum.clear()
+                t0 = time.time()
+                total_step += 1
+                ran_val = False
+                micro = 0
+
+            # ---- save (master only)
+            if cfg.master_process and (epoch > 0 and epoch % cfg.epoch_save_checkpoint == 0 or epoch + 1 == cfg.num_epochs):
+                path = os.path.join("./checkpoints_ar", cfg.run_name, str(epoch))
+                os.makedirs(path, exist_ok=True)
+                unwrap(self.model).save_model(path)
+                print(f"[AR] saved to {path}")
 
 
 

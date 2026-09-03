@@ -1,0 +1,14 @@
+# grammar sweep 2026-05-29T14:20:27Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T14:40:56Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T14:44:49Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T14:47:04Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T14:48:42Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T14:52:01Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T15:01:54Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+# grammar sweep 2026-05-29T15:09:40Z  epochs=250 regime=epsilon nsamples=2000 nproc=3
+lg=0.0  validity:   2.700%   (95% CI 2.08% - 3.51%)  uniqueness: 40.741%   (among 54 valid)  diversity:  0.943  mean_len:   78.6 chars  [checkpoints/gram_lg0.0_e250/249]
+lg=0.001  validity:   0.900%   (95% CI 0.57% - 1.42%)  uniqueness: 83.333%   (among 18 valid)  diversity:  0.941  mean_len:   77.5 chars  [checkpoints/gram_lg0.001_e250/249]
+lg=0.003  validity:   0.350%   (95% CI 0.17% - 0.72%)  uniqueness: 100.000%   (among 7 valid)  diversity:  0.832  mean_len:   91.1 chars  [checkpoints/gram_lg0.003_e250/249]
+lg=0.01  validity:   0.250%   (95% CI 0.11% - 0.58%)  uniqueness: 80.000%   (among 5 valid)  diversity:  0.889  mean_len:   82.4 chars  [checkpoints/gram_lg0.01_e250/249]
+lg=0.03  validity:   0.400%   (95% CI 0.20% - 0.79%)  uniqueness: 100.000%   (among 8 valid)  diversity:  0.873  mean_len:   102.0 chars  [checkpoints/gram_lg0.03_e250/249]
+lg=0.1  validity:   0.450%   (95% CI 0.24% - 0.85%)  uniqueness: 88.889%   (among 9 valid)  diversity:  0.948  mean_len:   83.8 chars  [checkpoints/gram_lg0.1_e250/249]

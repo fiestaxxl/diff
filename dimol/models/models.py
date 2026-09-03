@@ -78,8 +78,8 @@ class DiffusionTransformer(nn.Module):
 
         self.noise_head = OutLayer(config)
 
-        # self.out_proj = nn.Linear(config.emb_dim, config.vocab_size, bias=True)
-        self.out_proj = NormalizedLinear(config.emb_dim, config.vocab_size, bias=True)
+        self.out_proj = nn.Linear(config.emb_dim, config.vocab_size, bias=True)
+        #self.out_proj = NormalizedLinear(config.emb_dim, config.vocab_size, bias=True)
         # self.out_proj.weight = self.token_embedding.weight
 
         self.apply(self._init_params)

@@ -1,5 +1,5 @@
 #export CUDA_VISIBLE_DEVICES=GPU-06442a8b-7f6a-4196-aaa4-7d1bd86520e3,GPU-aeeae707-d2ff-94ba-f8b2-a9692669101c && python3 train.py
-#export CUDA_VISIBLE_DEVICES=GPU-06442a8b-7f6a-4196-aaa4-7d1bd86520e3,GPU-aeeae707-d2ff-94ba-f8b2-a9692669101c && torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 train.py
+#export CUDA_VISIBLE_DEVICES=GPU-dc48e1f4-b5a9-76e3-488f-64573ffede9b,GPU-fee0dc35-8889-3f90-cd80-238315957336,GPU-c624b4e0-f383-df3a-3cc1-4c3b797558e5 && torchrun --nproc_per_node=3 --nnodes=1 --node_rank=0 train.py
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
@@ -119,13 +119,27 @@ class TrainingConfig:
     class_weight: ClassWeightConfig = field(default_factory=ClassWeightConfig)
 
     # ── Misc ──────────────────────────────────────────────────────────────────
-    run_name:            str  = 'v11'
+    run_name:            str  = 'v12'
     path_to_tokenizer:   Path = Path("data/smiles_bpe.json")
     exp:                 Any  = None
     regime:              str = 'epsilon'
+    paren_delta:         torch.tensor = None
+    ring_count:          torch.tensor = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+
+        paren_delta = self.paren_delta
+        ring_count = self.ring_count
+        vocab = self.data.vocab
+
+        self.paren_delta = None
+        self.ring_count = None
+        self.data.vocab = None
+        yield asdict(self)
+
+        self.paren_delta = paren_delta
+        self.ring_count = ring_count
+        self.data.vocab = vocab
 
 def is_ddp_run() -> bool:
     return int(os.environ.get("WORLD_SIZE", 1)) > 1
@@ -144,11 +158,20 @@ def main():
     training_config = TrainingConfig(
         hardware=HardwareConfig(use_mp=True, mixed_dtype=torch.float16, compile_model=False)
     )
-    model_config = TransformerConfig(vocab_size=512, pad_idx=training_config.data.pad_idx, num_text_blocks=4, max_pos=training_config.data.seq_len+10)
+    vocab_size = 512
+    model_config = TransformerConfig(vocab_size=vocab_size, pad_idx=training_config.data.pad_idx, num_text_blocks=4, max_pos=training_config.data.seq_len+10)
 
     tokenizer = SmilesTokenizer.load(training_config.path_to_tokenizer)
     training_config.data.vocab = tokenizer.get_vocab()
 
+
+    training_config.run_name = os.environ.get("RUN_NAME", training_config.run_name)
+    training_config.schedule.num_epochs = int(
+        os.environ.get("NUM_EPOCHS", training_config.schedule.num_epochs)
+    )
+    if "LAMBDA_GRAMMAR" in os.environ:
+        training_config.optimiser.lambda_grammar = float(os.environ["LAMBDA_GRAMMAR"])
+        
     ddp = is_ddp_run()
 
     if ddp:
@@ -174,6 +197,17 @@ def main():
     model = DiffusionTransformer(model_config)
     model.to(device)
 
+    paren_delta = torch.zeros(vocab_size, device=device)     # "(" minus ")"
+    ring_count  = torch.zeros(vocab_size, 10, device=device) # per-digit char counts
+    for tok, idx in tokenizer.get_vocab().items():
+        if tok in tokenizer.SPECIAL_TOKENS:
+            continue
+        paren_delta[idx] = tok.count("(") - tok.count(")")
+        for d in range(10):
+            ring_count[idx, d] = tok.count(str(d))
+    
+    training_config.paren_delta = paren_delta
+    training_config.ring_count = ring_count
 
     if training_config.hardware.compile_model:
         model = torch.compile(model, backend="aot_eager")
@@ -186,7 +220,7 @@ def main():
     val_dataset = SmilesDataset('/projects/BIAM_Chem/data/tokenized', 'val')
     
 
-    train_sampler = DistributedSampler(train_dataset, shuffle=True) if ddp else None
+    train_sampler = DistributedSampler(train_dataset, shuffle=True, drop_last=True) if ddp else None
     val_sampler = DistributedSampler(val_dataset, shuffle=False, drop_last=True) if ddp else None
 
     training_config.data.sampler = train_sampler
