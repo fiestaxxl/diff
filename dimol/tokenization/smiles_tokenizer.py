@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
+from typing import Iterable, List, Optional, Sequence, Union
 
 from tokenizers import (
     AddedToken,
@@ -78,6 +78,8 @@ class SmilesTokenizer:
         min_frequency: int = 2,
         bracket_min_frequency: int = 1,
         show_progress: bool = True,
+        isolate_structure: bool = False,
+        protect_elements: Sequence[str] = ("Cl", "Br"),
     ) -> "SmilesTokenizer":
         """Train a SMILES tokenizer.
 
@@ -88,14 +90,22 @@ class SmilesTokenizer:
             min_frequency: BPE merge minimum frequency
             bracket_min_frequency: minimum count to keep a bracket atom
             show_progress: print progress messages
-        """
-        # --- pass 1: materialize corpus + collect bracket atoms ---
-        corpus = list(smiles_iter)
-        if show_progress:
-            print(f"[SmilesTokenizer] Corpus size: {len(corpus)} molecules")
+            isolate_structure: never let a merge cross a parenthesis or a ring digit,
+                so those stay single tokens. Costs compression, removes the class of
+                tokens that can open a branch or a ring without closing it.
+            protect_elements: two-letter element symbols that must stay one token.
+                Without this BPE happily cuts "CCCl" into "CCC" + "l", which is a
+                chemical error: the chlorine disappears and a bare "l" appears.
 
+        ``smiles_iter`` may be a callable returning a fresh iterator; training then
+        makes two passes over it instead of holding the corpus in memory.
+        """
+        def corpus_pass():
+            return smiles_iter() if callable(smiles_iter) else smiles_iter
+
+        # --- pass 1: collect bracket atoms ---
         bracket_atoms = collect_bracket_atoms(
-            corpus, min_frequency=bracket_min_frequency
+            corpus_pass(), min_frequency=bracket_min_frequency
         )
         if show_progress:
             print(
@@ -105,9 +115,22 @@ class SmilesTokenizer:
 
         # --- pass 2: build BPE training corpus by stripping brackets ---
         # Replace each [...] with a single space. Whitespace pre-tokenizer
-        # then turns each non-bracket run into one BPE "word".
+        # then turns each non-bracket run into one BPE "word". With
+        # isolate_structure, parentheses and ring digits are blanked out the same
+        # way, so no merge can ever contain one.
         bracket_replace = re.compile(r"\[[^\]]+\]")
-        bpe_corpus = [bracket_replace.sub(" ", smi) for smi in corpus]
+        structure_replace = re.compile(r"[()0-9]")
+        elements = [e for e in (protect_elements or []) if e]
+        element_replace = re.compile("|".join(sorted(elements, key=len, reverse=True))) if elements else None
+
+        def bpe_corpus_pass():
+            for smi in corpus_pass():
+                text = bracket_replace.sub(" ", smi)
+                if element_replace is not None:
+                    text = element_replace.sub(" ", text)
+                if isolate_structure:
+                    text = structure_replace.sub(" ", text)
+                yield text
 
         # --- BPE tokenizer ---
         tok = Tokenizer(models.BPE(unk_token=cls.UNK))
@@ -137,13 +160,18 @@ class SmilesTokenizer:
             initial_alphabet=SMILES_BASE_ALPHABET,
             show_progress=show_progress,
         )
-        tok.train_from_iterator(bpe_corpus, trainer=trainer)
+        tok.train_from_iterator(bpe_corpus_pass(), trainer=trainer)
 
         # --- swap pre-tokenizer for INFERENCE ---
         # Isolate [...] as separate pre-tokens so AddedTokens match them.
         # Non-bracket gaps stay as single contiguous pre-tokens for BPE.
+        parts = [r"\[[^\]]+\]"]
+        parts += sorted(elements, key=len, reverse=True)
+        if isolate_structure:
+            parts.append(r"[()0-9]")
+        isolate_pattern = "|".join(parts)
         tok.pre_tokenizer = pre_tokenizers.Split(
-            pattern=Regex(r"\[[^\]]+\]"),
+            pattern=Regex(isolate_pattern),
             behavior="isolated",
         )
 
@@ -156,7 +184,7 @@ class SmilesTokenizer:
                 rstrip=False,
                 normalized=False,
             )
-            for b in bracket_atoms
+            for b in list(bracket_atoms) + elements
         ]
         tok.add_tokens(added)
 

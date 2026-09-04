@@ -72,7 +72,8 @@ def main(cfg: DictConfig) -> None:
     log_config(cfg)
     prep = OmegaConf.to_container(cfg.prepare, resolve=True) or {}
     tok_cfg = dict(prep.get("tokenizer") or {})  # already a plain dict
-    source = dict(prep.get("source") or {})
+    # train on the curated corpus when it exists, not on the raw source
+    source = dict(prep.get("corpus") or prep.get("source") or {})
     canonicalize = bool(prep.get("canonicalize", True))
 
     train_split = source.get("splits", {}).get("train", "train")

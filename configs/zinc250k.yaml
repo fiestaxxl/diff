@@ -1,0 +1,85 @@
+# ZINC-250k: corpus preparation, tokenizer training, corpus tokenization.
+#
+#   python scripts/prepare_data.py      configs/zinc250k.yaml
+#   python scripts/train_tokenizer.py   configs/zinc250k.yaml
+#   python scripts/audit_tokenizer.py   configs/zinc250k.yaml
+#   python scripts/tokenize_dataset.py  configs/zinc250k.yaml
+
+run_name: zinc250k
+
+variables:
+  root: data/zinc250k          # everything this config writes lives here
+
+tokenizer:
+  path: ${variables.root}/tokenizers/bpe_512_prot.json   # chosen by the audit
+
+prepare:
+  # ---- raw source, read once by prepare_data.py ----
+  source:
+    hf_repo: yairschiff/zinc250k
+    column: canonical_smiles   # the dataset ships both smiles and canonical_smiles
+    splits:                    # upstream split name -> our split name
+      train: train
+      val: validation
+
+  # ---- curation ----
+  canonicalize: true           # re-canonicalize with the local RDKit, so the corpus
+                               # matches what evaluation will canonicalize to
+  deduplicate: true            # across splits as well, keeping them disjoint
+  max_smiles_len: 120          # characters; upstream max is 109, so this only guards
+  allowed_elements: null       # e.g. [C, N, O, S, F, Cl, Br, I, P] to restrict chemistry
+  test_from_val: 0.5           # upstream has no test split; route half of validation to
+                               # test by a stable hash of the molecule
+  seed: 42
+  nprocs: 16                   # processes for canonicalization and tokenization
+
+  out_dir: ${variables.root}/corpus     # <split>/shard_XXXXX.txt + stats.json
+  shard_size: 100000                    # molecules per text shard
+
+  # ---- curated corpus, read by the tokenizer and by tokenize_dataset.py ----
+  corpus:
+    files:
+      train: ${prepare.out_dir}/train
+      val: ${prepare.out_dir}/val
+      test: ${prepare.out_dir}/test
+    splits:
+      train: train
+      val: val
+      test: test
+
+  # ---- tokenization into arrays ----
+  tokenized_dir: ${variables.root}/tokenized
+  max_length: 64               # from the audit: bpe_512_prot has p99 37 and max 62 on
+                               # train, so 64 loses nothing and is a multiple of 64
+  array_shard_size: 250000     # molecules per .npy shard
+
+  # ---- tokenizer candidates, trained and compared by scripts/train_tokenizers.py ----
+  tokenizer_dir: ${variables.root}/tokenizers
+  audit_split: val             # audit on data the tokenizer never saw
+  audit_molecules: null        # null = the whole split
+  tokenizer_candidates:
+    # atom level: the chemically safe baseline, longest sequences
+    - {name: atomwise, kind: atomwise, min_frequency: 1}
+    # plain BPE: bracket atoms protected, two-letter elements NOT protected
+    - {name: bpe_1024_raw, kind: bpe, vocab_size: 1024, min_frequency: 2,
+       bracket_min_frequency: 1, protect_elements: []}
+    # BPE with Cl and Br protected as single tokens
+    - {name: bpe_256_prot,  kind: bpe, vocab_size: 256,  min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_512_prot,  kind: bpe, vocab_size: 512,  min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_1024_prot, kind: bpe, vocab_size: 1024, min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_2048_prot, kind: bpe, vocab_size: 2048, min_frequency: 2, bracket_min_frequency: 1}
+    # additionally: parentheses and ring digits never enter a merge
+    - {name: bpe_1024_isolated, kind: bpe, vocab_size: 1024, min_frequency: 2,
+       bracket_min_frequency: 1, isolate_structure: true}
+    - {name: bpe_512_isolated, kind: bpe, vocab_size: 512, min_frequency: 2,
+       bracket_min_frequency: 1, isolate_structure: true}
+
+  # ---- the chosen tokenizer, used by tokenize_dataset.py ----
+  tokenizer:
+    out: ${tokenizer.path}     # trained by scripts/train_tokenizers.py
+    vocab_size: 512            # only used when retraining through train_tokenizer.py
+    min_frequency: 2
+    bracket_min_frequency: 1
+    isolate_structure: false
+    class_weights_out: null
+    include_splits: []

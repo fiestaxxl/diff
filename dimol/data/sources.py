@@ -44,7 +44,7 @@ def iter_smiles(
         path = files.get(split)
         if path is None:
             raise KeyError(f"prepare.source.files has no {split!r} split")
-        raw_iter = _iter_file(Path(path), column)
+        raw_iter = _iter_path(Path(path), column)
     elif source.get("hf_repo"):
         raw_iter = _iter_hf(source["hf_repo"], split, column, source.get("hf_config"))
     else:
@@ -66,6 +66,18 @@ def _iter_hf(repo: str, split: str, column: str, config_name: Optional[str] = No
         raise KeyError(f"dataset {repo} has no {split!r} split; available: {list(ds)}")
     for ex in ds[split]:
         yield ex.get(column)
+
+
+def _iter_path(path: Path, column: str) -> Iterator[str]:
+    """A single file, or a directory of shards written by TextShardWriter."""
+    if path.is_dir():
+        shards = sorted(path.glob("shard_*.txt")) or sorted(path.glob("*.txt"))
+        if not shards:
+            raise FileNotFoundError(f"no shards in {path}")
+        for shard in shards:
+            yield from _iter_file(shard, column)
+        return
+    yield from _iter_file(path, column)
 
 
 def _iter_file(path: Path, column: str) -> Iterator[str]:
