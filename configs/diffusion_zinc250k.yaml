@@ -1,0 +1,246 @@
+# Diffusion training on ZINC-250k. This file is the whole experiment: architecture,
+# losses, data, optimizer, precision, parallelism, evaluation, checkpointing, logging.
+#
+#   bash scripts/train.sh configs/diffusion_zinc250k.yaml            # 1 GPU
+#   bash scripts/train.sh configs/diffusion_zinc250k.yaml --gpus 8   # DDP
+#
+# The corpus and the tokenizer come from configs/zinc250k.yaml; the tokenizer choice is
+# argued in docs/tokenizer-zinc250k.md. Defaults here reproduce the pre-refactor
+# objective, so this run is the baseline the experiment ladder is compared against.
+#
+# Any field can be overridden on the command line, which is how sweeps are run:
+#   bash scripts/train.sh configs/diffusion_zinc250k.yaml run_name=lg_0.01 loss.lambda_grammar=0.01
+#
+# Defaults reproduce the pre-refactor run, except for the speed flags marked below.
+
+run_name: zinc_baseline        # names the checkpoint dir and the comet experiment;
+                               # change it for every run, otherwise autoresume picks
+                               # up the previous run's checkpoints
+task: diffusion                # diffusion | ar. Selects the loss and the model family
+seed: 42                       # base seed; each rank gets seed + rank so that the
+                               # noise draws differ across replicas
+
+# Values referenced elsewhere as ${variables.x}. Nothing reads this section directly,
+# it only exists to keep the numbers that appear in several places in one spot.
+variables:
+  seq_len: 64                  # stored sequence length of the tokenized arrays; the
+                               # audit put the training p99 at 37 tokens and the max at
+                               # 62, so 64 loses nothing (docs/tokenizer-zinc250k.md)
+  data_dir: data/zinc250k/tokenized              # where <split>_tokens_*.npy live
+  tokenizer_path: data/zinc250k/tokenizers/bpe_384_alpha.json
+  vocab_size: 448              # tokenizer vocab is 386; rounded up to a multiple of 64,
+                               # the extra rows simply never get used
+  pad_idx: 0
+
+tokenizer:
+  path: ${variables.tokenizer_path}   # needed for the grammar loss tables and for
+                                      # decoding samples during training
+
+#############
+### Model ###
+#############
+model:
+  name: diffusion_transformer  # registry key; see dimol/builders.py
+  model_dim: 768               # residual stream width; the main capacity/speed knob
+  emb_dim: 32                  # dimension of the latent the diffusion actually runs in
+                               # (token embeddings). Raising it makes the denoising
+                               # problem higher-dimensional but gives the decoder more
+                               # room; it also sets p_simple's shape
+  time_dim: 768                # width of the timestep embedding fed to adaLN modulation
+  num_heads: 12                # model_dim / num_heads = 64 = head_dim, a good size for
+                               # flash attention; keep the ratio at 64 when scaling
+  num_text_blocks: 4           # transformer blocks in the denoiser; depth knob
+  vocab_size: ${variables.vocab_size}   # must be >= the tokenizer vocab (checked)
+  pad_idx: ${variables.pad_idx}         # row kept at zero in the embedding table
+  max_pos: 64                  # RoPE table size; must be >= seq_len, cheap to over-size
+  attn_dropout: 0.0            # dropout inside attention; raise only if the model
+                               # starts overfitting a small corpus
+
+#################
+### Diffusion ###
+#################
+diffusion:
+  regime: epsilon              # what the network predicts: epsilon (the noise) or x
+                               # (the clean latent). Changes the target and how x0_hat
+                               # is reconstructed; an ablation axis
+  alpha: {name: cosine}        # alpha(0)=0, alpha(1)=1: how much signal survives at t
+  beta: {name: cosine}         # beta(0)=1, beta(1)=0: how much noise is added at t.
+                               # cosine gives alpha^2 + beta^2 = 1 (variance preserving)
+  x0_noise_std: 0.25           # extra Gaussian noise added to the token embeddings
+                               # before diffusion; it smooths the discrete data into a
+                               # continuous distribution. Compare it against the actual
+                               # embedding scale: if it dominates, the model mostly sees
+                               # noise (see docs/diffusion-review.md)
+  t_eps: 5.0e-5                # t is drawn from [t_eps, 1 - t_eps]; keeps alpha and beta
+                               # away from the degenerate endpoints
+  p_simple_std: 1.0            # std of the prior the sampler starts from; should match
+                               # the std of the data latents, otherwise sampling starts
+                               # off-distribution
+
+loss:
+  lambda_mse: 1.0              # weight of the denoising MSE, the diffusion objective
+                               # proper. It also multiplies the reconstruction term
+  lambda_ce: 1.0               # weight of the cross-entropy that trains the readout
+                               # (latent -> token). Set to 0 to train pure diffusion
+  lambda_grammar: 0.001        # weight of the SMILES grammar penalty (bracket balance
+                               # and ring parity). 0 disables the term and its compute
+  alpha_eps: 1.0e-3            # alpha is clamped to this before dividing by it when
+                               # reconstructing x0_hat; guards t -> 0
+  ce_alpha_threshold: 0.80     # cross-entropy is computed only on samples whose alpha
+                               # exceeds this, i.e. the low-noise part of the batch.
+                               # Lower it to train the readout on noisier latents
+  mse_t0_alpha_threshold: 0.80 # same gate for the reconstruction term
+  grammar_alpha_threshold: 0.5 # same gate for the grammar term
+  label_smoothing: 0.0         # label smoothing inside the cross-entropy
+  grammar_enabled: true        # build the grammar tables at all; with lambda_grammar=0
+                               # the term and its softmax are skipped entirely
+  mask_padding: false          # false = original behaviour: padding takes part in
+                               # attention and in the MSE terms. true = pads are excluded
+                               # from attention and from both MSE terms, which makes the
+                               # loss independent of how much padding a batch holds.
+                               # Required before turning on bucket_by_length; it changes
+                               # the objective, so re-measure the baseline
+  autocast_scope: loss         # loss = autocast covers the readout and the loss (the
+                               # (B, L, V) logits then live in bf16); forward = only the
+                               # denoiser runs under autocast, as before the refactor
+  class_weights_path: null     # optional per-token weights for the cross-entropy,
+                               # e.g. data/class_weights.pt from scripts/train_tokenizer.py
+
+##################
+### Dataloader ###
+##################
+train_loader:
+  dataset:
+    name: smiles_npy           # registry key; reads <split>_tokens.npy (+ shards)
+    data_dir: ${variables.data_dir}
+    split: train
+    mmap: true                 # memory-map the arrays instead of loading them into RAM;
+                               # turn off only for a tiny corpus on a fast disk
+  shuffle: true                # reshuffled every epoch (through the sampler under DDP)
+  drop_last: true              # drop the last incomplete batch, keeps step sizes equal
+  num_workers: 4               # dataloader processes per rank; raise until the GPU stops
+                               # waiting for data, watch host RAM
+  pin_memory: true             # pinned host memory, required for a fast async H2D copy
+  persistent_workers: true     # keep workers alive between epochs; saves the restart cost
+  prefetch_factor: 2           # batches prefetched per worker
+  # Batch molecules of similar length and cut every batch to its own longest sequence.
+  # With ~80% padding this is the single largest speed-up available, but it only makes
+  # sense together with loss.mask_padding=true (see docs/pipeline.md, section 7).
+  bucket_by_length: false
+  bucket_pool_factor: 64       # pool = 64 batches, sorted inside and shuffled outside;
+                               # larger = more homogeneous batches, less randomness
+  trim_to_multiple_of: 8       # round the trimmed length up to a multiple of 8
+
+eval_loader:
+  dataset:
+    name: smiles_npy
+    data_dir: ${variables.data_dir}
+    split: val
+    mmap: true
+  shuffle: false               # keep the eval order fixed so numbers are comparable
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+####################
+### Optimization ###
+####################
+optimizer:
+  name: adamw
+  lr: 3.0e-4                   # only the initial value; the schedule overwrites it every
+                               # step, so tune scheduler.max_lr instead
+  betas: [0.9, 0.95]           # second beta lower than torch's default, as in GPT-style
+                               # training: reacts faster to gradient scale changes
+  eps: 1.0e-8
+  weight_decay: 0.01           # applied to matrices only; token_embedding, biases and
+                               # norms are excluded (see dimol/training/optim.py)
+  fused: null                  # null = auto (fused kernel on CUDA); force false to debug
+
+scheduler:
+  name: warmup_cosine          # linear warmup then cosine decay to min_lr
+  max_lr: 3.0e-3               # peak lr reached at the end of warmup
+  min_lr: 3.0e-5               # lr after t_max and the floor of the cosine
+  t_warmup: 500ba              # warmup length in optimizer steps (ba) or epochs (ep)
+  t_max: 10000ba               # where the cosine bottoms out; keep it at max_duration
+
+algorithms:
+  gradient_clipping:
+    clipping_type: norm        # only global-norm clipping is implemented
+    clipping_threshold: 1.0    # null disables clipping; watch gnorm in the log to tune
+
+#######################
+### Training params ###
+#######################
+max_duration: 10000ba          # end of training, in epochs (ep) or optimizer steps (ba).
+                               # 224,568 molecules at batch 512 is 438 steps per epoch,
+                               # so this is about 23 epochs
+global_train_batch_size: null  # molecules per optimizer step across all ranks.
+                               # null = device_train_microbatch_size * n_gpus, i.e. the
+                               # batch grows with the number of GPUs. Set a number to
+                               # keep the batch fixed while scaling hardware
+device_train_microbatch_size: 512   # molecules per forward pass per GPU; the memory knob.
+                               # grad accumulation is derived: global / (micro * n_gpus)
+device_eval_batch_size: 512    # same for evaluation, where no gradients are stored
+eval_interval: 250ba            # how often the eval loader runs
+eval_subset_num_batches: -1    # -1 = whole eval split; a positive number caps it
+eval_before_train: skip        # skip | regular: run one evaluation before step 1
+decoder_pretrain_steps: 0      # first N steps train with lambda_mse = 0, i.e. readout
+                               # only. 0 disables this warmup
+
+precision: amp_bf16            # amp_bf16 | amp_fp16 | fp32. bf16 needs no GradScaler and
+                               # is the right choice on Ampere and newer; amp_fp16
+                               # reproduces the pre-refactor numerics
+tf32: true                     # TensorFloat-32 matmuls on Ampere+; a no-op elsewhere
+compile: true                  # torch.compile the denoiser; the first step pays the
+                               # compilation cost (1-2 minutes), turn off when debugging
+compile_backend: inductor      # inductor is the real backend; aot_eager only for debugging
+deterministic: false           # cudnn deterministic kernels; slower, for bit-exact reruns
+sync_each_step: true           # cuda.synchronize() before measuring the step; makes the
+                               # reported tok/s honest at a negligible cost
+dist_timeout: 1800             # seconds before a collective operation gives up
+ddp_config:
+  backend: nccl                # nccl on GPU, gloo for a CPU debug run
+  find_unused_parameters: false   # keep false; true costs a full graph traversal per step
+  gradient_as_bucket_view: true   # gradients live inside the DDP buckets, saves a copy
+
+###############
+### Logging ###
+###############
+log_to_console: true
+console_log_interval: 1ba      # every step: loss, accuracy, tokens-per-sec
+loggers:
+  console: {}
+  jsonl: {}                    # metrics.jsonl inside the run dir, one line per event
+  comet:
+    enabled: true              # needs COMET_API_KEY in the environment
+    project_name: diffusion_smiles_model
+    mode: create               # create a new experiment instead of resuming one
+
+########################
+### Saving & Loading ###
+########################
+save_folder: checkpoints       # run dir is <save_folder>/<run_name>
+save_interval: 1000ba           # how often a checkpoint is written
+save_num_checkpoints_to_keep: 3   # older ones are deleted; -1 keeps everything
+save_last: true                # always write a checkpoint when training ends
+save_weights_only: false       # true skips optimizer/scaler state, which breaks resume
+autoresume: true               # continue from the latest checkpoint of this run_name
+load_path: null                # explicit checkpoint dir to start from, e.g. for finetuning
+load_weights_only: false       # load weights but start the step counter at zero
+
+################
+### Sampling ###
+################
+sampling:
+  enabled: true                # generate molecules during training; needs rdkit
+  interval: 1000ba             # how often; sampling is expensive, keep it rare
+  num_samples: 256             # molecules per sampling round, per rank
+  num_timesteps: 300           # Euler-Maruyama steps; more = better samples, linear cost
+  variance: 1.0                # the sigma of the reverse SDE; 0 turns it into an ODE
+  t_start: 1.0e-4              # integration starts here (pure noise end)
+  t_end: 0.999                 # and stops here (data end)
+  seed: null                   # null = process rank, so ranks generate different molecules
+  batch_size: null             # null = all num_samples in one forward
+  log_examples: 10             # how many decoded SMILES to print into the log

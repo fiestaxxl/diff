@@ -11,7 +11,7 @@ variables:
   root: data/zinc250k          # everything this config writes lives here
 
 tokenizer:
-  path: ${variables.root}/tokenizers/bpe_512_prot.json   # chosen by the audit
+  path: ${variables.root}/tokenizers/bpe_384_alpha.json   # chosen by the audit
 
 prepare:
   # ---- raw source, read once by prepare_data.py ----
@@ -49,8 +49,9 @@ prepare:
 
   # ---- tokenization into arrays ----
   tokenized_dir: ${variables.root}/tokenized
-  max_length: 64               # from the audit: bpe_512_prot has p99 37 and max 62 on
-                               # train, so 64 loses nothing and is a multiple of 64
+  max_length: 64               # from the audit: p99 is 37 tokens and the longest
+                               # training molecule is 62, so 64 loses nothing and is a
+                               # multiple of 64
   array_shard_size: 250000     # molecules per .npy shard
 
   # ---- tokenizer candidates, trained and compared by scripts/train_tokenizers.py ----
@@ -61,13 +62,19 @@ prepare:
     # atom level: the chemically safe baseline, longest sequences
     - {name: atomwise, kind: atomwise, min_frequency: 1}
     # plain BPE: bracket atoms protected, two-letter elements NOT protected
-    - {name: bpe_1024_raw, kind: bpe, vocab_size: 1024, min_frequency: 2,
+    - {name: bpe_1024_raw, restrict_alphabet: false, kind: bpe, vocab_size: 1024, min_frequency: 2,
        bracket_min_frequency: 1, protect_elements: []}
     # BPE with Cl and Br protected as single tokens
-    - {name: bpe_256_prot,  kind: bpe, vocab_size: 256,  min_frequency: 2, bracket_min_frequency: 1}
-    - {name: bpe_512_prot,  kind: bpe, vocab_size: 512,  min_frequency: 2, bracket_min_frequency: 1}
-    - {name: bpe_1024_prot, kind: bpe, vocab_size: 1024, min_frequency: 2, bracket_min_frequency: 1}
-    - {name: bpe_2048_prot, kind: bpe, vocab_size: 2048, min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_256_prot, restrict_alphabet: false,  kind: bpe, vocab_size: 256,  min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_512_prot, restrict_alphabet: false,  kind: bpe, vocab_size: 512,  min_frequency: 2, bracket_min_frequency: 1}
+    # alphabet taken from the corpus instead of the hardcoded latin one: no unreachable
+    # letters left in the vocabulary for the model to emit
+    - {name: bpe_512_alpha, kind: bpe, vocab_size: 512, min_frequency: 2,
+       bracket_min_frequency: 1, restrict_alphabet: true}
+    - {name: bpe_384_alpha, kind: bpe, vocab_size: 384, min_frequency: 2,
+       bracket_min_frequency: 1, restrict_alphabet: true}
+    - {name: bpe_1024_prot, restrict_alphabet: false, kind: bpe, vocab_size: 1024, min_frequency: 2, bracket_min_frequency: 1}
+    - {name: bpe_2048_prot, restrict_alphabet: false, kind: bpe, vocab_size: 2048, min_frequency: 2, bracket_min_frequency: 1}
     # additionally: parentheses and ring digits never enter a merge
     - {name: bpe_1024_isolated, kind: bpe, vocab_size: 1024, min_frequency: 2,
        bracket_min_frequency: 1, isolate_structure: true}

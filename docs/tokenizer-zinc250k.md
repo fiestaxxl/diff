@@ -44,6 +44,8 @@ candidates that pass the first two.
 | bpe_1024 protected | 1026 | 0.000% | 0 | 4 | 22 | 16 | 23.4% | 19 | 34 | 2.27 | 71 |
 | bpe_2048 protected | 2050 | 0.000% | 0 | 4 | 21 | 15 | 26.5% | 19 | 34 | 2.31 | 108 |
 | bpe_512 structure-isolated | 514 | 0.000% | 0 | 7 | 30 | 22 | 0.0% | 28 | 47 | 1.55 | 166 |
+| bpe_512 corpus alphabet | 514 | 0.000% | 0 | 5 | 22 | 16 | 19.5% | 20 | 35 | 2.20 | 28 |
+| **bpe_384 corpus alphabet** | **386** | **0.000%** | **0** | **5** | **23** | **16** | **18.0%** | **20** | **35** | **2.16** | **28** |
 
 Token counts on the training split, including `<bos>` and `<eos>`:
 
@@ -73,6 +75,14 @@ token, where they cannot be mismatched. Branch matching shortens from 28 to 16 t
 the 95th percentile. Isolating parentheses and digits from every merge goes the other
 way: no ring is ever closed inside a token, and the distances grow back to 7 and 30.
 
+**The default alphabet leaves emittable junk in the vocabulary.** The tokenizer's
+initial alphabet was the whole latin alphabet plus punctuation, 77 characters, while
+ZINC uses 34. The unused ones stay in the vocabulary as dead entries, and a generative
+model can emit them: the first smoke samples contained `j`, `q`, `w`, `E`, which no
+chemistry can parse. Building the alphabet from the corpus (`restrict_alphabet`) cuts
+dead vocabulary from 71 to 28 at identical sequence lengths, and the freed budget goes
+into real merges: vocabulary 386 then gives the same p50 and p99 as 514.
+
 **Vocabulary past 512 buys almost nothing.** Going 512 -> 1024 -> 2048 saves one token
 at p50 and one at p99 while doubling and then quadrupling the vocabulary. In this model
 the readout has to separate the vocabulary inside a 32-dimensional diffusion latent, so
@@ -80,14 +90,19 @@ extra classes are not free.
 
 ## Decision
 
-`bpe_512_prot`, vocabulary 514, `max_length` 64.
+`bpe_384_alpha`: BPE, vocabulary 386, two-letter elements protected, alphabet taken from
+the corpus. `max_length` 64.
 
 * zero atom splits, zero unknown tokens, lossless roundtrip on all three splits;
 * 64 covers the whole corpus: the longest training molecule is 62 tokens, so nothing is
   dropped, and 64 is a multiple of 64 for the kernels;
 * 22 tokens at the median means 65% of a padded batch is padding, which the length
-  bucketing already implemented in the data loader turns into an average batch width of
-  about 24.
+  bucketing in the data loader turns into an average batch width of 26 on the real
+  arrays, i.e. 41% of the fixed-width compute;
+* 386 classes instead of 514 or 1026 matters here because the readout has to separate
+  the vocabulary inside a 32-dimensional diffusion latent;
+* the model config rounds `vocab_size` up to 448, a multiple of 64; the extra rows are
+  never produced by the tokenizer.
 
 Two candidates are kept as ablation axes rather than discarded: `atomwise` is the
 chemically safest and longest, `bpe_512_isolated` never lets a merge touch a parenthesis

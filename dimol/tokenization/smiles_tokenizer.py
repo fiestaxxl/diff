@@ -80,6 +80,7 @@ class SmilesTokenizer:
         show_progress: bool = True,
         isolate_structure: bool = False,
         protect_elements: Sequence[str] = ("Cl", "Br"),
+        restrict_alphabet: bool = True,
     ) -> "SmilesTokenizer":
         """Train a SMILES tokenizer.
 
@@ -96,6 +97,11 @@ class SmilesTokenizer:
             protect_elements: two-letter element symbols that must stay one token.
                 Without this BPE happily cuts "CCCl" into "CCC" + "l", which is a
                 chemical error: the chlorine disappears and a bare "l" appears.
+            restrict_alphabet: build the initial alphabet from the characters the
+                corpus actually contains. The default SMILES_BASE_ALPHABET carries the
+                whole latin alphabet, so a corpus like ZINC leaves dozens of unreachable
+                entries in the vocabulary that a generative model can still emit,
+                producing strings that no chemistry can parse.
 
         ``smiles_iter`` may be a callable returning a fresh iterator; training then
         makes two passes over it instead of holding the corpus in memory.
@@ -103,10 +109,20 @@ class SmilesTokenizer:
         def corpus_pass():
             return smiles_iter() if callable(smiles_iter) else smiles_iter
 
-        # --- pass 1: collect bracket atoms ---
-        bracket_atoms = collect_bracket_atoms(
-            corpus_pass(), min_frequency=bracket_min_frequency
-        )
+        # --- pass 1: collect bracket atoms and, optionally, the real alphabet ---
+        observed_chars: set[str] = set()
+        if restrict_alphabet:
+            def counting_pass():
+                for smi in corpus_pass():
+                    observed_chars.update(smi)
+                    yield smi
+            bracket_atoms = collect_bracket_atoms(
+                counting_pass(), min_frequency=bracket_min_frequency
+            )
+        else:
+            bracket_atoms = collect_bracket_atoms(
+                corpus_pass(), min_frequency=bracket_min_frequency
+            )
         if show_progress:
             print(
                 f"[SmilesTokenizer] Found {len(bracket_atoms)} unique bracket "
@@ -140,8 +156,16 @@ class SmilesTokenizer:
         tok.pre_tokenizer = pre_tokenizers.Whitespace()
 
         # Compute BPE budget. Final vocab = specials + alphabet + brackets + BPE.
+        alphabet = (
+            sorted(c for c in observed_chars if not c.isspace())
+            if restrict_alphabet
+            else SMILES_BASE_ALPHABET
+        )
+        if show_progress and restrict_alphabet:
+            print(f"[SmilesTokenizer] Alphabet from corpus: {len(alphabet)} characters "
+                  f"(default list has {len(SMILES_BASE_ALPHABET)})")
         n_specials = len(cls.SPECIAL_TOKENS)
-        n_alphabet = len(SMILES_BASE_ALPHABET)
+        n_alphabet = len(alphabet)
         n_brackets = len(bracket_atoms)
         bpe_budget = max(vocab_size - n_specials - n_alphabet - n_brackets, 64)
         bpe_target = n_specials + n_alphabet + bpe_budget
@@ -157,7 +181,7 @@ class SmilesTokenizer:
             vocab_size=bpe_target,
             min_frequency=min_frequency,
             special_tokens=cls.SPECIAL_TOKENS,
-            initial_alphabet=SMILES_BASE_ALPHABET,
+            initial_alphabet=alphabet,
             show_progress=show_progress,
         )
         tok.train_from_iterator(bpe_corpus_pass(), trainer=trainer)

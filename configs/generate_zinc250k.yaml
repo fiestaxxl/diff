@@ -1,0 +1,37 @@
+# Generate from a ZINC-250k checkpoint and report quality metrics.
+#
+#   python scripts/generate.py configs/generate_chebi.yaml generate.checkpoint=checkpoints/v12/ep499-ba9500
+
+run_name: generate
+task: diffusion
+
+variables:
+  seq_len: 64
+  tokenizer_path: data/zinc250k/tokenizers/bpe_384_alpha.json
+
+tokenizer:
+  path: ${variables.tokenizer_path}
+
+# alpha/beta must match the training run
+diffusion:
+  regime: epsilon
+  alpha: {name: cosine}
+  beta: {name: cosine}
+  p_simple_std: 1.0
+
+generate:
+  checkpoint: checkpoints/zinc_baseline/ep22-ba10000
+  seq_len: ${variables.seq_len}
+  num_samples: 2000              # >= 2000 for a stable estimate of low validity
+  batch_size: 500
+  num_timesteps: 300
+  variance: 1.0
+  t_start: 1.0e-3
+  t_end: 0.999
+  seed: 42                       # fixed, so runs are comparable
+  regime: null                   # null -> taken from diffusion.regime
+  train_smiles_path: data/zinc250k/corpus/train   # shards; used for novelty
+  output_dir: null               # null -> next to the checkpoint
+  progress: true
+
+tf32: false

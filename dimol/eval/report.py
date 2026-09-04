@@ -114,18 +114,27 @@ def format_report(m: dict) -> str:
 
 
 def load_train_canon(path: Optional[str]) -> Optional[set]:
-    """Canonical training SMILES for novelty (file with one molecule per line)."""
+    """Canonical training SMILES for novelty.
+
+    Accepts a single file with one molecule per line or a directory of shards
+    written by TextShardWriter.
+    """
     if path is None:
         return None
     p = Path(path)
     if not p.exists():
         print(f"[novelty] train smiles file not found: {p} -> skipping novelty")
         return None
+    files = sorted(p.glob("shard_*.txt")) or sorted(p.glob("*.txt")) if p.is_dir() else [p]
+    if not files:
+        print(f"[novelty] no shards in {p} -> skipping novelty")
+        return None
     canon = set()
-    with open(p) as f:
-        for line in f:
-            c = _canon(line.strip())
-            if c is not None:
-                canon.add(c)
+    for file in files:
+        with open(file) as f:
+            for line in f:
+                c = _canon(line.strip())
+                if c is not None:
+                    canon.add(c)
     print(f"[novelty] loaded {len(canon)} canonical training SMILES")
     return canon
