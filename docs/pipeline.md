@@ -151,28 +151,21 @@ python scripts/bench_ladder.py configs/diffusion_chebi.yaml
 
 | # | Item | Where it lives | Measured here |
 |---|---|---|---|
-| 1 | TF32 | `dimol/training/distributed.py:96` (`set_float32_matmul_precision`), called from `scripts/train.py:125`; key `tf32` | n/a (CUDA) |
-| 2 | bf16 autocast | `scripts/train.py:66` `_autocast_factory`, applied in `dimol/training/tasks.py::DiffusionTask.compute_loss`; key `precision` | n/a (CUDA) |
-| 2b | fp16 + GradScaler for pre-Ampere | `scripts/train.py:76` `_build_scaler`; order scale -> backward -> unscale -> clip -> step in `dimol/training/trainer.py:193-222` | n/a (CUDA) |
-| 3 | torch.compile | `scripts/train.py:146`; the graph-break fix is `dimol/models/layers.py:148` `apply_rotary`; keys `compile`, `compile_backend` | 791 -> 652 ms, **1.21x** |
+| 1 | TF32 | `dimol/training/distributed.py:96` (`set_float32_matmul_precision`), called from `scripts/train.py:125`; key `tf32` | see the ladder |
+| 2 | bf16 autocast | `scripts/train.py:66` `_autocast_factory`, applied in `dimol/training/tasks.py::DiffusionTask.compute_loss`; key `precision` | see the ladder |
+| 2b | fp16 + GradScaler for pre-Ampere | `scripts/train.py:76` `_build_scaler`; order scale -> backward -> unscale -> clip -> step in `dimol/training/trainer.py:193-222` | see the ladder |
+| 3 | torch.compile | `scripts/train.py:146`; the graph-break fix is `dimol/models/layers.py:148` `apply_rotary`; keys `compile`, `compile_backend` | 152.7 -> 22.3 ms with tf32 and bf16, **6.85x** cumulative |
 | 4 | Flash attention | `dimol/models/layers.py:140` and `dimol/models/gpt.py:65` (`F.scaled_dot_product_attention`) | 20.9 -> 15.4 ms per attention fwd+bwd, **1.36x** |
 | 5 | Powers of two | config: `vocab_size 512`, `model_dim 768`, `num_heads 12` (head_dim 64) | vocab 500 -> 512: 786 -> 770 ms, **1.02x** |
-| 6 | Fused AdamW | `dimol/training/optim.py:73` (auto on CUDA); key `optimizer.fused` | n/a (CUDA) |
+| 6 | Fused AdamW | `dimol/training/optim.py:73` (auto on CUDA); key `optimizer.fused` | see the ladder |
 | 7 | Grad accumulation | derived in `dimol/config.py:249` `update_batch_size_info`; loss divided at `dimol/training/trainer.py:193`, boundary at `:208` | not a speed knob |
 | 8 | DDP | wrap `scripts/train.py:148`, sync flag `dimol/training/trainer.py:190`, one all-reduce `dimol/training/distributed.py:108`, `set_epoch` `dimol/training/trainer.py:181` | needs >1 GPU |
 | + | Gradient clipping | `dimol/training/trainer.py:292` `_clip_gradients` | - |
 | + | Warmup + cosine | `dimol/training/optim.py:92` `WarmupCosine` | - |
 | + | Weight decay on 2D only | `dimol/training/optim.py:26` `param_groups` | - |
 | + | Honest timing | `torch.cuda.synchronize()` at `dimol/training/trainer.py:227`, tok/s in the step line | - |
-| + | One host copy per step | `dimol/training/trainer.py:304` `_to_floats` (was ~16 blocking `float()` calls) | n/a (CUDA) |
+| + | One host copy per step | `dimol/training/trainer.py:304` `_to_floats` (was ~16 blocking `float()` calls) | see the ladder |
 | + | autocast over readout+loss | `dimol/training/tasks.py::compute_loss`; key `loss.autocast_scope` | logits 218 -> 109 MiB at batch 512 |
-
-Ladder as measured on this CPU:
-
-| Rung | median step | cumulative |
-|---|---|---|
-| baseline: fp32, no compile, autocast over forward only | 791 ms | 1.00x |
-| + torch.compile (inductor, single graph) | 652 ms | 1.21x |
 
 ## 7. Sequence length: bucketing instead of truncation
 
