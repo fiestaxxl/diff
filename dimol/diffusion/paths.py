@@ -13,7 +13,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
     """
     Abstract base class for conditional probability paths
     """
-    def __init__(self, p_simple: Sampleable, p_data: Sampleable):
+    def __init__(self, p_simple: Sampleable, p_data: Optional[Sampleable] = None):
         super().__init__()
         self.p_simple = p_simple
         self.p_data = p_data
@@ -84,8 +84,15 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
-    def __init__(self, p_data: Sampleable, p_simple_shape: List[int], alpha: Alpha, beta: Beta):
-        p_simple = IsotropicGaussian(shape = p_simple_shape, std = 1.0)
+    def __init__(
+        self,
+        p_simple_shape: List[int],
+        alpha: Alpha,
+        beta: Beta,
+        p_simple_std: float = 1.0,
+        p_data: Optional[Sampleable] = None,
+    ):
+        p_simple = IsotropicGaussian(shape = p_simple_shape, std = p_simple_std)
         super().__init__(p_simple, p_data)
         self.alpha = alpha
         self.beta = beta
@@ -99,6 +106,11 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
             - z: (num_samples, c, h, w) (num_samples, seq_len, emb_dim)
             - y: (num_samples, label_dim)
         """
+        if self.p_data is None:
+            raise RuntimeError(
+                "p_data is not set: sample_conditioning_variable() requires a data "
+                "distribution. Training does not use it (z comes from the batch embeddings)."
+            )
         return self.p_data.sample(num_samples)
     
     def sample_conditional_path(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:

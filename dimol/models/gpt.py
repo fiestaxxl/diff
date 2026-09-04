@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import math
 import json
-import inspect
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -161,26 +160,6 @@ class SmilesAR(nn.Module):
             if eos_id is not None and (next_id == eos_id).all():
                 break
         return prompt_ids
-
-    def configure_optimizers(self, weight_decay, lr, device_type, master_process=True):
-        decay, nodecay, seen = [], [], set()
-        for n, p in self.named_parameters():
-            if not p.requires_grad or id(p) in seen: 
-                continue
-            seen.add(id(p))
-            (decay if p.dim() >= 2 else nodecay).append(p)
-        groups = [
-            {"params": decay,   "weight_decay": weight_decay},
-            {"params": nodecay, "weight_decay": 0.0},
-        ]
-        if master_process:
-            nd  = sum(p.numel() for p in decay)
-            nnd = sum(p.numel() for p in nodecay)
-            print(f"[AR] decayed: {len(decay)} tensors, {nd:,} params")
-            print(f"[AR] non-decayed: {len(nodecay)} tensors, {nnd:,} params")
-        fused = device_type == "cuda" and "fused" in inspect.signature(torch.optim.AdamW).parameters
-        if master_process: print(f"[AR] using fused AdamW: {fused}")
-        return torch.optim.AdamW(groups, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=fused)
 
     # ---------- save / load ----------
     def save_model(self, save_dir) -> None:

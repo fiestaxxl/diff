@@ -1,0 +1,34 @@
+# Tokenizer training and corpus tokenization.
+#
+#   python scripts/train_tokenizer.py configs/tokenizer_chebi.yaml
+#   python scripts/tokenize_dataset.py configs/tokenizer_chebi.yaml
+
+run_name: tokenizer
+
+tokenizer:
+  path: data/smiles_bpe.json
+
+prepare:
+  source:
+    hf_repo: liupf/ChEBI-20-MM
+    column: SMILES
+    splits:
+      train: train
+      val: validation
+      test: test
+  canonicalize: true
+  max_length: 208
+  out_dir: data/tokenized
+  nprocs: null                   # null -> half of the CPU cores
+
+  tokenizer:
+    vocab_size: 512
+    min_frequency: 10
+    bracket_min_frequency: 2
+    out: data/smiles_bpe.json
+    audit_out: data/tokenizer_audit.json
+    audit_molecules: 20000
+    class_weights_out: null      # e.g. data/class_weights.pt
+    class_weights_strategy: sqrt_inverse
+    class_weights_max: 5.0
+    include_splits: []           # e.g. [validation] when not tuning on val

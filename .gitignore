@@ -1,9 +1,12 @@
 venv
+.venv
 *.png
 *.csv
 *.parquet
 core
 checkpoints
+checkpoints_*
+runs
 images
 *.dat
 .env
@@ -11,3 +14,7 @@ images
 __pycache__
 *.npy
 *.pt
+*.egg-info
+.pytest_cache
+.ruff_cache
+metrics.jsonl

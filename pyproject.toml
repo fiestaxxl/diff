@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dimol"
+version = "0.2.0"
+description = "Diffusion models for SMILES generation: config-driven training, sampling and evaluation"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "omegaconf>=2.3",
+    "numpy>=1.24",
+    "tokenizers>=0.15",
+    "safetensors>=0.4",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# molecule quality evaluation
+chem = ["rdkit>=2023.9", "fcd", "Levenshtein", "nltk"]
+# data preparation
+data = ["datasets>=2.16", "pyarrow"]
+# logging
+logging = ["comet-ml>=3.35", "tensorboard"]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+include = ["dimol*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # long lines in the carried-over formulas
+    "E741",  # single-letter names in math code
+]
+
+[tool.ruff.lint.per-file-ignores]
+# code carried over unchanged: not restyled for the sake of style
+"dimol/diffusion/*.py" = ["E", "F", "B", "UP", "I"]
+"dimol/eval/metrics.py" = ["E", "F", "B", "UP", "I"]
+"dimol/models/layers.py" = ["E", "B", "UP", "I"]

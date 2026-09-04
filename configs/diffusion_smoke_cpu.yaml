@@ -1,0 +1,86 @@
+# CPU smoke run on random data: checks that the config builds and that the
+# training loop makes steps. Used by tests/test_smoke_train.py.
+#
+#   python scripts/train.py configs/diffusion_smoke_cpu.yaml
+
+run_name: smoke
+task: diffusion
+seed: 0
+
+variables:
+  seq_len: 16
+  vocab_size: 1024
+
+model:
+  name: diffusion_transformer
+  model_dim: 32
+  emb_dim: 8
+  time_dim: 32
+  num_heads: 4
+  num_text_blocks: 1
+  vocab_size: ${variables.vocab_size}
+  pad_idx: 0
+  max_pos: 32
+  attn_dropout: 0.0
+
+diffusion:
+  regime: epsilon
+  alpha: {name: cosine}
+  beta: {name: cosine}
+  x0_noise_std: 0.25
+  t_eps: 5.0e-5
+
+loss:
+  lambda_mse: 1.0
+  lambda_ce: 1.0
+  lambda_grammar: 0.0            # grammar off -> no tokenizer required
+  grammar_enabled: false
+
+train_loader:
+  dataset:
+    name: random
+    max_len: ${variables.seq_len}
+    num_samples: 32
+  shuffle: true
+  drop_last: true
+  num_workers: 0
+  pin_memory: false
+
+eval_loader:
+  dataset:
+    name: random
+    max_len: ${variables.seq_len}
+    num_samples: 16
+  shuffle: false
+  drop_last: true
+  num_workers: 0
+  pin_memory: false
+
+optimizer:
+  name: adamw
+  lr: 1.0e-3
+  weight_decay: 0.01
+scheduler:
+  name: warmup_cosine
+  max_lr: 1.0e-3
+  min_lr: 1.0e-4
+  t_warmup: 2ba
+  t_max: 8ba
+
+max_duration: 4ba
+global_train_batch_size: 16
+device_train_microbatch_size: 8
+device_eval_batch_size: 8
+eval_interval: 2ba
+precision: fp32
+device: cpu
+
+log_to_console: true
+console_log_interval: 1ba
+loggers:
+  console: {}
+
+save_folder: null
+autoresume: false
+sampling:
+  enabled: false

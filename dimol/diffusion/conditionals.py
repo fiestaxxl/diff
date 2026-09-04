@@ -1,3 +1,11 @@
+"""alpha_t / beta_t schedules. The formulas are carried over from the original
+code unchanged; only the commented-out alternative versions and one unreachable
+raise were removed.
+
+Note: LinearBeta applies clamp(1-t, min=1e-5), so the base-class check beta(1)=0
+fails when the object is constructed. The class is kept as is, but it is not
+registered in the registry (see dimol/builders.py).
+"""
 import torch
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, List
@@ -130,7 +138,6 @@ class SquareRootBeta(Beta):
             - beta_t (num_samples, 1)
         """ 
         return torch.sqrt(1-t)
-        raise NotImplementedError("Fill me in for Question 2.1!")
 
     def dt(self, t: torch.Tensor) -> torch.Tensor:
         """
@@ -143,30 +150,6 @@ class SquareRootBeta(Beta):
         return - 0.5 / (torch.sqrt(1 - t) + 1e-4)
 
 
-
-# class CosineAlpha(Alpha):
-#     """
-#     Implements alpha_t = cos^2(pi/2 * t)
-#     """
-#     def __call__(self, t: torch.Tensor) -> torch.Tensor:
-#         """
-#         Args:
-#             - t: time (num_samples, 1, 1, 1) or (num_samples, 1, 1)
-#         Returns:
-#             - alpha_t (same shape as input)
-#         """
-#         return torch.cos(0.5 * torch.pi * t) ** 2
-    
-#     def dt(self, t: torch.Tensor) -> torch.Tensor:
-#         """
-#         Evaluates d/dt alpha_t = -pi * cos(pi/2 * t) * sin(pi/2 * t)
-#         = -pi/2 * sin(pi * t)
-#         Args:
-#             - t: time (num_samples, 1, 1, 1) or (num_samples, 1, 1)
-#         Returns:
-#             - d/dt alpha_t (same shape as input)
-#         """
-#         return -0.5 * torch.pi * torch.sin(torch.pi * t)
 
 class CosineAlpha:
     """
@@ -193,27 +176,3 @@ class CosineBeta:
 
     def dt(self, t: torch.Tensor) -> torch.Tensor:
         return -0.5 * torch.pi * torch.sin(0.5 * torch.pi * t).to(self.device)
-
-# class CosineBeta(Beta):
-#     """
-#     Implements beta_t = sqrt(1 - cos^2(pi/2 * t)) = sin(pi/2 * t)
-#     """
-#     def __call__(self, t: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
-#         """
-#         Args:
-#             - t: time (num_samples, 1, 1, 1) or (num_samples, 1, 1)
-#             - eps: small epsilon for numerical stability
-#         Returns:
-#             - beta_t (same shape as input)
-#         """
-#         return torch.clamp(torch.sin(0.5 * torch.pi * t), min=eps)
-    
-#     def dt(self, t: torch.Tensor) -> torch.Tensor:
-#         """
-#         Evaluates d/dt beta_t = pi/2 * cos(pi/2 * t)
-#         Args:
-#             - t: time (num_samples, 1, 1, 1) or (num_samples, 1, 1)
-#         Returns:
-#             - d/dt beta_t (same shape as input)
-#         """
-#         return 0.5 * torch.pi * torch.cos(0.5 * torch.pi * t)

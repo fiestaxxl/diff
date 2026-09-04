@@ -1,0 +1,104 @@
+# AR baseline (grammar teacher). Reproduces the settings of the old train_ar.py.
+#
+#   torchrun --nproc_per_node=6 scripts/train.py configs/ar_chebi.yaml
+
+run_name: ar_v2
+task: ar
+seed: 42
+
+variables:
+  seq_len: 208
+  data_dir: /projects/BIAM_Chem/data/tokenized
+  tokenizer_path: data/smiles_bpe.json
+  vocab_size: 512
+  pad_idx: 0
+
+tokenizer:
+  path: ${variables.tokenizer_path}
+
+model:
+  name: smiles_ar
+  vocab_size: ${variables.vocab_size}
+  model_dim: 256
+  n_heads: 8
+  n_layers: 6
+  max_pos: 212                 # seq_len + 4
+  pad_idx: ${variables.pad_idx}
+  attn_dropout: 0.0
+  tie_lm_head: true
+
+loss:
+  label_smoothing: 0.0
+
+train_loader:
+  dataset:
+    name: smiles_npy
+    data_dir: ${variables.data_dir}
+    split: train
+  shuffle: true
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+eval_loader:
+  dataset:
+    name: smiles_npy
+    data_dir: ${variables.data_dir}
+    split: val
+  shuffle: false
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+optimizer:
+  name: adamw
+  lr: 3.0e-3
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1
+  fused: null
+
+scheduler:
+  name: warmup_cosine
+  max_lr: 3.0e-3
+  min_lr: 3.0e-5
+  t_warmup: 500ba
+  t_max: 2500ba
+
+algorithms:
+  gradient_clipping:
+    clipping_type: norm
+    clipping_threshold: 1.0
+
+max_duration: 3000ep
+global_train_batch_size: null
+device_train_microbatch_size: 1024
+device_eval_batch_size: 1024
+eval_interval: 100ba
+eval_before_train: skip
+
+precision: amp_bf16
+tf32: true
+compile: true
+compile_backend: inductor
+
+log_to_console: true
+console_log_interval: 1ba
+loggers:
+  console: {}
+  jsonl: {}
+  comet:
+    enabled: true
+    project_name: diffusion_ar_model
+
+save_folder: checkpoints_ar
+save_interval: 250ep
+save_num_checkpoints_to_keep: 3
+autoresume: true
+
+sampling:
+  enabled: false               # AR sampling is done separately, not inside the loop
