@@ -109,6 +109,13 @@ weight averaging, random-traversal augmentation, min-SNR weighting, padding mask
 either place, clamping the x0 estimate, x0 parameterisation, Laplace and mixup corruption
 of x0, unit-norm embeddings.
 
+Correction after the second-seed wave of 2026-09-07: at 5.04M parameters a single run
+resolves nothing below about eight points of validity, because the seed spread inside one
+configuration reaches that. Three of four apparent winners from single-seed screening
+(padding weight 0.6, cross-entropy weight 3, sphere corruption) did not survive a second
+seed. Screening must run three seeds per row, which costs fifteen minutes per wave, and
+the two survivors are the repair decoder and the logit-normal timestep distribution.
+
 Still open, in the order they look worth running:
 
 1. self-conditioning: feed the previous x0 estimate back as an extra input;
@@ -119,3 +126,9 @@ Still open, in the order they look worth running:
    invalid strings;
 6. depth against width at fixed parameters;
 7. the second seed on every modest positive from the loss-shaping wave.
+
+Added to the list by the same wave:
+
+* find out where the variance comes from: the reference is stable across seeds and the
+  logit-normal runs are not, so it is a property of that timestep distribution. Try a
+  longer warmup, a lower peak learning rate, and more parameters, three seeds each.
