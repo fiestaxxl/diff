@@ -421,3 +421,57 @@ and the length-preserving mode has to be quoted alongside. And the ranking is no
 same under the two decoders: the sphere-corruption run is sixth on argmax and first once
 repaired, which means a screening study that ranks on argmax alone can pick the wrong
 winner. Both decoders should be reported for every configuration that matters.
+
+## Combinations, extra seeds, and the variance problem
+
+All rows below are 100 solver steps, which is why they are not directly comparable with
+the 300-step columns above. The reference reads 5.78% on seed 43 against 6.19% on seed 42,
+so the reference itself is stable to about half a point.
+
+| run | argmax | repaired (mixed) | unique valid |
+|---|---|---|---|
+| r_tl0_padw06 | **26.15%** | 59.47% | 5204 |
+| r_tl0_thr90 | 16.36% | 57.74% | 5225 |
+| r_tl0_lsmooth | 14.11% | 53.94% | 4763 |
+| r_tl0_cepad | 8.03% | 42.11% | 3175 |
+| r_tl0_s44 | 7.18% | 30.88% | 1714 |
+| r_thr90_s43 | 6.72% | 44.81% | 3459 |
+| r_cepad | 5.89% | 44.75% | 3460 |
+| r_base80_s43 | 5.78% | 44.00% | 3357 |
+
+Weighting padding at 0.6 in the noise loss, on top of the logit-normal timesteps, is the
+largest argmax number in the study, 26.15% against about 15% for the timestep change
+alone. It costs uniqueness, 87.5% against 100%, so the unique-valid count is 5204 rather
+than 5947, but that is still the top of the table. It also fits the padding story from the
+other direction: removing padding from the loss destroys generation, keeping it at full
+weight spends capacity on it, and 0.6 is better than either end.
+
+Supervising padding through the cross-entropy does nothing on its own, 5.89% against the
+5.78-6.19% reference, and costs half the gain when combined with the timestep change. It
+stays off.
+
+The uncomfortable row is the third seed of the winner: 7.18% where seeds 42 and 43 gave
+about 15% and 13.7%, with uniqueness down to 75.7% and, under the repair decoder, 30.88%
+against 47-63% for its siblings. The reference's own seeds agree to half a point, so this
+variance is introduced by the logit-normal sampler, not by the measurement. The effect is
+real and large in the mean, and it is also unstable: any claim about it needs a seed count
+and a spread, not a single number.
+
+## The length-preserving decoder on the checkpoints that matter
+
+Mixed repair buys yield partly by shortening molecules. Closing what is open does not,
+and this is the table to quote when the length distribution has to hold. Corpus mean is
+44.3 characters.
+
+| run | argmax | closed | uniqueness | mean length | unique valid |
+|---|---|---|---|---|---|
+| r_tl0_ce3 | 16.62% | **40.59%** | 99.5% | 50.2 | 4039 |
+| r_tl0_sphere | 12.25% | 30.62% | 99.9% | 37.7 | 3059 |
+| r_tl0_cepad | 8.03% | 19.21% | 100.0% | 41.3 | 1921 |
+| r_base80 | 6.19% | 13.07% | 100.0% | 47.6 | 1307 |
+
+This is the honest headline of the whole study. The original setup, uniform timesteps and
+argmax decoding, returns about 620 distinct valid molecules per 10,000 attempts. Two
+changes that cost nothing at training or sampling time, logit-normal timesteps with a
+heavier cross-entropy and closing repair at decoding, return 4039, with uniqueness above
+99% and a length distribution that still looks like the corpus.
