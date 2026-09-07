@@ -670,3 +670,58 @@ false, with the measurement that condemns it written next to it in the config.
 The general lesson is about coupling, not about length: a knob that silently turns on a
 second behaviour will eventually be used after that second behaviour has been ruled out.
 Anything measured as harmful gets its own flag and its own default.
+
+## Self-conditioning and length conditioning, three seeds each
+
+All rows: 5.04M parameters, 17,600 steps, closing repair, 100 solver steps, judged on
+usable molecules per attempt and on the Frechet ChemNet Distance at a matched 1500
+molecules. The reference is the uniform-timestep model, 13.20% usable and FCD 14.41.
+
+| configuration | seeds | usable, mean | range | heavy atoms | rings | trivial |
+|---|---|---|---|---|---|---|
+| self-conditioning | 3 | **17.38%** | 14.00-19.93 | 20.3 | 2.38 | 3.0% |
+| length + self-conditioning | 3 | 13.20% | 9.13-17.67 | 21.2 | 2.47 | 1.7% |
+| reference, uniform timesteps | 2 | 12.90% | 12.65-13.20 | 20.6 | 2.48 | 2.5% |
+| tied readout | 3 | 12.42% | 11.47-13.53 | 20.5 | 2.41 | 3.0% |
+| length conditioning | 3 | 9.16% | 5.07-12.13 | 22.0 | 2.63 | 1.5% |
+
+And the aggregate metric on one representative of each, same sample size:
+
+| run | usable | FCD | scaffolds | heavy atoms | rings |
+|---|---|---|---|---|---|
+| self-conditioning | 18.20% | 12.47 | 293 | 20.9 | 2.53 |
+| length + self-conditioning | 17.67% | **11.61** | 280 | 21.3 | 2.47 |
+| reference | 13.20% | 14.41 | 224 | 20.5 | 2.48 |
+| length conditioning | 10.27% | 15.88 | 176 | 22.5 | 2.75 |
+| corpus | - | 0 | - | 23.3 | 2.79 |
+
+**Self-conditioning is the first change that improves both axes at once.** Usable
+molecules rise 38%, FCD falls 13%, distinct scaffolds rise 31%, and the molecules
+themselves are unchanged: 2.2% trivial against the reference's 2.6%, 20.9 heavy atoms
+against 20.5. Its worst seed, 14.00%, beats the reference's best, 13.20%, so it clears the
+conservative rule. Every earlier "win" in this document failed that test or bought its
+validity by shrinking the molecules; this one does neither. It is also the result that
+transfers: nothing about it is specific to SMILES.
+
+**Length conditioning does exactly what it was built to do and still loses.** Trained-in
+length conditioning puts heavy atoms at 22.5 against the corpus 23.3, a tenth of a
+standard deviation, and rings at 2.75 against 2.79 - by far the closest length and ring
+statistics measured anywhere here. And usable molecules fall to 10.27% and FCD rises to
+15.88. So the degenerate short-sequence optimum was doing real work: with it removed, the
+model has to produce a full-length molecule and cannot yet get the content right. That is
+a more useful failure than the collapse it replaced, because it names the real limit.
+
+**Together they are the best configuration measured**: FCD 11.61, the lowest of any run in
+this study, at 17.67% usable, with 1.0% trivial molecules. Length conditioning supplies the
+distribution and self-conditioning supplies the accuracy.
+
+**The tied readout does nothing** - 12.42% against 12.90%, ranges overlapping - and it does
+not narrow the seed spread either, 2.1 points against the reference's 0.6. That rules out
+one of the two suspects for the run-to-run variance: the readout chasing a moving embedding
+table is not the cause.
+
+The remaining gap is now specific. On the length-conditioned model, where lengths and ring
+counts match the corpus, aromatic rings are 0.82 against 1.89, a shift of 1.09 standard
+deviations with a KS statistic of 0.46, and the synthetic accessibility score is 1.9
+standard deviations worse. The model builds rings of the right number and the wrong kind.
+That, not validity, is the next target.
