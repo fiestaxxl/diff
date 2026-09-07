@@ -290,3 +290,32 @@ Augmentation by random SMILES traversals costs about half the validity at a fixe
 count. Four times as many distinct strings for the same number of updates means each
 string is seen a quarter as often, and at this budget repetition is what the model needs.
 The two seeds agree to within 0.03 points, so this is not noise.
+
+## Loss shaping at the same size and budget
+
+Same protocol as the screening wave: 5.04M parameters, 17,600 steps, grammar loss off,
+seed 42, 10,000 attempts, argmax decoding.
+
+| run | what changed | validity |
+|---|---|---|
+| r_thr90 | cross-entropy gate raised from alpha 0.8 to 0.9 | 7.33% |
+| r_lsmooth | label smoothing 0.05 | 6.93% |
+| r_padw06 | padding weighted 0.6 in the noise loss | 6.73% |
+| r_ce2 | cross-entropy weight 2.0 | 6.52% |
+| r_ce05 | cross-entropy weight 0.5 | 6.08% |
+| r_padw03 | padding weighted 0.3 | 5.06% |
+| r_minsnr5 | min-SNR weighting, gamma 5 | 0.79% |
+| r_minsnr1 | min-SNR weighting, gamma 1 | 0.47% |
+
+min-SNR weighting is the clearest negative in the whole study, and the reason is
+structural rather than incidental. The weight caps the contribution of high signal-to-noise
+timesteps, but this objective already routes its two supervision terms, the
+cross-entropy and the reconstruction error, through exactly those timesteps by gating
+them on alpha. Downweighting them removes most of the token-level supervision, which is
+what the samples show.
+
+Raising the gate from 0.8 to 0.9 goes the other way and helps, which points the same
+direction: the token-level terms want to run on the cleanest states, not on more of them.
+Both padding-weight rows and both cross-entropy-weight rows land within a point of each
+other above the reference, close enough that they need a second seed before any of them
+is called a real effect.
