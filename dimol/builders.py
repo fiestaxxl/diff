@@ -177,6 +177,12 @@ def build_task(
             "mse_t0_alpha_threshold": float(loss_cfg.get("mse_t0_alpha_threshold", 0.80)),
             "grammar_alpha_threshold": float(loss_cfg.get("grammar_alpha_threshold", 0.5)),
             "mask_padding": loss_cfg.get("mask_padding", "none"),
+            "pad_weight": float(loss_cfg.get("pad_weight", 1.0)),
+            "min_snr_gamma": (
+                None
+                if loss_cfg.get("min_snr_gamma") is None
+                else float(loss_cfg["min_snr_gamma"])
+            ),
             "ce_input": str(loss_cfg.get("ce_input", "x0")),
             "decoder_pretrain_steps": int(cfg.decoder_pretrain_steps),
             "grammar_enabled": grammar_enabled,

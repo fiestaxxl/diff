@@ -88,3 +88,75 @@ def test_ar_loss() -> None:
     assert set(metrics) == {"loss", "token_acc", "ppl"}
     assert torch.isfinite(metrics["loss"])
     metrics["loss"].backward()
+
+
+def test_pad_weight_one_matches_the_default_objective():
+    """pad_weight=1.0 must be the original loss, so the knob is safe to leave in."""
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch()
+    torch.manual_seed(7)
+    base = _diffusion_task().compute_loss(model, batch)["loss"]
+    torch.manual_seed(7)
+    weighted = _diffusion_task(pad_weight=1.0).compute_loss(model, batch)["loss"]
+    assert torch.allclose(base, weighted, atol=1e-6)
+
+
+def test_pad_weight_zero_matches_the_loss_mask():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch()
+    torch.manual_seed(7)
+    masked = _diffusion_task(mask_padding="loss").compute_loss(model, batch)["mse_loss"]
+    torch.manual_seed(7)
+    zero = _diffusion_task(pad_weight=0.0).compute_loss(model, batch)["mse_loss"]
+    assert torch.allclose(masked, zero, atol=1e-6)
+
+
+def test_pad_weight_interpolates_between_them():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch()
+    out = {}
+    for w in (0.0, 0.5, 1.0):
+        torch.manual_seed(7)
+        out[w] = float(_diffusion_task(pad_weight=w).compute_loss(model, batch)["mse_loss"])
+    assert min(out[0.0], out[1.0]) <= out[0.5] <= max(out[0.0], out[1.0])
+
+
+def test_pad_weight_needs_a_mask():
+    model = _tiny_denoiser()
+    batch = {"token_ids": _batch()["token_ids"]}
+    try:
+        _diffusion_task(pad_weight=0.5).compute_loss(model, batch)
+    except ValueError as err:
+        assert "attention_mask" in str(err)
+    else:
+        raise AssertionError("a missing attention_mask must be reported")
+
+
+def test_min_snr_with_a_huge_gamma_is_the_plain_mean():
+    """With gamma above every SNR in the batch the weights are all 1."""
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch()
+    torch.manual_seed(7)
+    base = _diffusion_task().compute_loss(model, batch)["mse_loss"]
+    torch.manual_seed(7)
+    capped = _diffusion_task(min_snr_gamma=1e12).compute_loss(model, batch)["mse_loss"]
+    assert torch.allclose(base, capped, atol=1e-4)
+
+
+def test_min_snr_downweights_the_easy_low_noise_steps():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch(batch_size=32)
+    torch.manual_seed(7)
+    base = float(_diffusion_task().compute_loss(model, batch)["mse_loss"])
+    torch.manual_seed(7)
+    capped = float(_diffusion_task(min_snr_gamma=1.0).compute_loss(model, batch)["mse_loss"])
+    assert capped != base
+    for value in (base, capped):
+        assert value == value and value >= 0.0
+
+
+def test_min_snr_and_pad_weight_compose():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch()
+    out = _diffusion_task(min_snr_gamma=5.0, pad_weight=0.3).compute_loss(model, batch)
+    assert torch.isfinite(out["loss"])

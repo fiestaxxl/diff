@@ -82,6 +82,8 @@ class DiffusionTask(Task):
         label_smoothing: float = 0.0,
         ce_input: str = "x0",
         mask_padding: str = "none",
+        pad_weight: float = 1.0,
+        min_snr_gamma: Optional[float] = None,
         decoder_pretrain_steps: int = 0,
         grammar_enabled: bool = True,
         class_weights: Optional[torch.Tensor] = None,
@@ -129,6 +131,15 @@ class DiffusionTask(Task):
         self.mask_padding = mask_padding
         self.mask_attention = mask_padding in ("attention", "both")
         self.mask_loss = mask_padding in ("loss", "both")
+        # pad_weight is the continuous version of mask_padding="loss": 1.0 keeps the
+        # original objective, 0.0 is the mask, and anything between keeps some
+        # supervision on where the molecule stops while freeing capacity for the atoms.
+        if not 0.0 <= float(pad_weight) <= 1.0:
+            raise ValueError(f"loss.pad_weight={pad_weight!r} must be in [0, 1]")
+        self.pad_weight = float(pad_weight)
+        if min_snr_gamma is not None and float(min_snr_gamma) <= 0.0:
+            raise ValueError(f"loss.min_snr_gamma={min_snr_gamma!r} must be > 0 or null")
+        self.min_snr_gamma = None if min_snr_gamma is None else float(min_snr_gamma)
         self.decoder_pretrain_steps = decoder_pretrain_steps
         self.grammar_enabled = grammar_enabled and lambda_grammar != 0.0
         self.class_weights = class_weights
@@ -200,8 +211,10 @@ class DiffusionTask(Task):
         # as commented-out code; it is what makes length bucketing safe, because the
         # objective then stops depending on how many pad positions a batch contains.
         pad_mask = batch.get("attention_mask")
-        if self.mask_padding != "none" and pad_mask is None:
-            raise ValueError("loss.mask_padding=true needs 'attention_mask' in the batch")
+        if (self.mask_padding != "none" or self.pad_weight != 1.0) and pad_mask is None:
+            raise ValueError(
+                "loss.mask_padding / loss.pad_weight need 'attention_mask' in the batch"
+            )
 
         raw = unwrap_model(model)
         embed = raw.token_embedding
@@ -240,14 +253,32 @@ class DiffusionTask(Task):
         with forward_ctx():
             eps_theta = model(input_embeddings=x, time=time, attention_mask=attn_mask)
 
-        if self.mask_loss:
+        # Per-sample weight from the signal-to-noise ratio of the drawn timestep. The
+        # plain mean treats every t alike, which lets the easy high-alpha steps, where
+        # the target is nearly free to predict, dominate the gradient. min-SNR caps the
+        # weight of those steps at gamma. Off by default, so the default objective is
+        # bit-for-bit the original one.
+        snr_weight = None
+        if self.min_snr_gamma is not None:
+            snr = (alpha**2 / beta.clamp(min=1e-8) ** 2).squeeze(-1).squeeze(-1)  # (B,)
+            capped = snr.clamp(max=self.min_snr_gamma)
+            snr_weight = capped / snr.clamp(min=1e-8) if self.regime == "epsilon" else capped
+
+        if self.mask_loss or self.pad_weight != 1.0:
             loss_mask = pad_mask.float()  # (B, L)
-            n_valid = loss_mask.sum(-1).clamp(min=1)  # (B,)
+            pos_w = loss_mask if self.mask_loss else loss_mask + (1.0 - loss_mask) * self.pad_weight
             mse_per_pos = ((eps_theta - target) ** 2).mean(dim=-1)  # (B, L)
-            mse_per_sample = (mse_per_pos * loss_mask).sum(-1) / n_valid  # (B,)
-            mse_loss = mse_per_sample.mean()
-        else:
+            mse_per_sample = (mse_per_pos * pos_w).sum(-1) / pos_w.sum(-1).clamp(min=1e-8)  # (B,)
+            mse_loss = (
+                mse_per_sample.mean()
+                if snr_weight is None
+                else (mse_per_sample * snr_weight).sum() / snr_weight.sum().clamp(min=1e-8)
+            )
+        elif snr_weight is None:
             mse_loss = ((eps_theta - target) ** 2).mean()
+        else:
+            mse_per_sample = ((eps_theta - target) ** 2).mean(dim=(-1, -2))  # (B,)
+            mse_loss = (mse_per_sample * snr_weight).sum() / snr_weight.sum().clamp(min=1e-8)
 
         # ----- Denoise to predicted x0 -----
         alpha = alpha.clamp(min=self.alpha_eps)  # (B, 1, 1)
