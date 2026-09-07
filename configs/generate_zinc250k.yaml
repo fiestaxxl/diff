@@ -33,6 +33,14 @@ generate:
                                  # sequences. A path to the tokenized split (or one
                                  # *attn_mask*.npy shard) draws the length from the corpus
                                  # instead and pins the rest of the canvas to padding
+  refine_rounds: 0               # extra denoise-renoise cycles after the trajectory. The
+                                 # readout decodes each position independently, so what
+                                 # needs several positions to agree, an aromatic ring in
+                                 # particular, is left to chance. Each round re-noises to
+                                 # refine_t and denoises again, so a position sees the
+                                 # others' current values. Costs sampling time only
+  refine_t: 0.9                  # how far back a round goes: lower means a bigger edit
+  refine_steps: 20               # solver steps inside one round
   length_floor: false            # true also forbids stopping before the drawn length.
                                  # Measured at 0% usable and 60-atom strings: the tail
                                  # fills with whatever token ranks first among the

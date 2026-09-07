@@ -104,6 +104,9 @@ def main(cfg: DictConfig) -> None:
         strict=bool(gen.get("strict_decode", False)),
         length_prior=_length_prior(gen),
         length_floor=bool(gen.get("length_floor", False)),
+        refine_rounds=int(gen.get("refine_rounds", 0) or 0),
+        refine_t=float(gen.get("refine_t", 0.9)),
+        refine_steps=int(gen.get("refine_steps", 20) or 20),
         time_grid=str(gen.get("time_grid", "uniform")),
         time_grid_power=float(gen.get("time_grid_power", 2.0)),
     )

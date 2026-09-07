@@ -13,7 +13,16 @@ overwritten with their exact conditional value, alpha(t) * pad_embedding + beta(
 which is the standard replacement method for conditional diffusion. The model then only
 has to fill the canvas it is given.
 
-That much is measured to be nearly free and nearly useless on its own: the model still
+Iterative refinement is the other addition, and it targets a different failure. The
+readout decodes every canvas position independently from the final latent, so anything
+that needs several positions to agree is left to chance: aromatic rings need five or six
+mutually consistent atoms plus a matched ring digit, and the measurements say the model
+produces the right number of rings and the wrong kind, 0.8 aromatic against the corpus
+1.9, with no training knob moving it. Refinement re-noises the finished sample part of
+the way back and denoises again, so each pass sees the decisions the last one made. It
+costs sampling time and no training.
+
+The length pinning below is measured to be nearly free and nearly useless on its own: the model still
 ends the molecule early, and pinning the tail changes validity by a point. Forcing it to
 fill the length instead, with ``length_floor``, is actively destructive, so the floor is
 off by default. Making the model actually use the length needs it as a training input,
@@ -56,6 +65,9 @@ class SamplingParams:
     strict: bool = False          # full connectivity check instead of bracket counting
     length_prior: Optional[Any] = None  # 1-d array of token lengths to draw from
     length_floor: bool = False    # also forbid stopping before the drawn length
+    refine_rounds: int = 0        # extra denoise-renoise cycles after the trajectory
+    refine_t: float = 0.9         # how far back each cycle re-noises to
+    refine_steps: int = 20        # solver steps per cycle
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
 
@@ -178,6 +190,25 @@ def sample_smiles(
         if needs_length:
             score_model.length = drawn_lengths.to(device)
         xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
+
+        for _ in range(max(int(params.refine_rounds), 0)):
+            # re-noise the finished sample to refine_t and denoise it again, so every
+            # position is decoded in the presence of the others' current values
+            t_back = torch.full((b, 1, 1), float(params.refine_t), device=device)
+            alpha, beta = path.alpha(t_back), path.beta(t_back)
+            xts = alpha * xts + beta * torch.randn_like(xts)
+            short = (
+                torch.linspace(params.refine_t, params.t_end, int(params.refine_steps))
+                .view(1, -1, 1, 1)
+                .expand(b, -1, -1, -1)
+                .to(device)
+            )
+            if on_step is not None:
+                xts = on_step(xts, short[:, 0])
+            if hasattr(score_model, "reset"):
+                score_model.reset()
+            xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
+
         logits = get_logits(xts)
         if decoder is None:
             ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
