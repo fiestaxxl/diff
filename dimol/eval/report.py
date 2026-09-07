@@ -68,9 +68,14 @@ def evaluate_smiles(
     div = float("nan")
     pool = list(uniq_valid)[:div_subsample]
     if len(pool) > 1:
+        # A canonical SMILES that rdkit wrote can still fail to re-parse: aromatic rings
+        # that will not kekulize on the way back in are the usual case. Drop those rather
+        # than handing None to the fingerprinter.
+        mols = [Chem.MolFromSmiles(s) for s in pool]
         fps = [
-            AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(s), fp_radius, fp_bits)
-            for s in pool
+            AllChem.GetMorganFingerprintAsBitVect(mol, fp_radius, fp_bits)
+            for mol in mols
+            if mol is not None
         ]
         sims: List[float] = []
         for i in range(len(fps)):

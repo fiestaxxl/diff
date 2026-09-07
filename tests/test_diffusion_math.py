@@ -114,3 +114,13 @@ def test_dense_grids_lean_the_way_they_say():
     ends = _time_grid(SamplingParams(num_timesteps=101, time_grid="ends_dense"))
     d = ends[1:] - ends[:-1]
     assert float(d[45:55].mean()) > float(d[:10].mean())  # dense at both ends
+
+
+def test_diversity_survives_a_smiles_that_will_not_reparse():
+    """rdkit can write a canonical string it cannot read back; that must not crash."""
+    from dimol.eval.report import evaluate_smiles
+
+    smiles = ["CCO", "c1ccccc1", "CC(=O)O", "", "C1CC1", "n1cccc1", "CCN(CC)CC"]
+    m = evaluate_smiles(smiles)
+    assert 0.0 <= m["validity"] <= 1.0
+    assert m["diversity"] == m["diversity"] or m["n_valid"] < 2  # not NaN when it can be
