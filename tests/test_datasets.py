@@ -98,3 +98,36 @@ def test_dataloader_covers_all_shards(tmp_path: Path) -> None:
     # the second epoch starts over the same data
     seen_again = [int(v) for batch in loader for v in batch["token_ids"][:, 0]]
     assert sorted(seen_again) == sorted(seen)
+
+
+def test_a_second_tokenization_pass_can_share_the_directory(tmp_path):
+    """A corpus arriving in batches is tokenized in passes into one directory."""
+    from dimol.data.shards import ArrayShardWriter
+
+    first = ArrayShardWriter(tmp_path, "train", max_length=4, shard_size=2)
+    for _ in range(4):
+        first.write([1, 2, 3, 0], [1, 1, 1, 0])
+    written = first.close()
+    assert [p.name for p in written if "tokens" in p.name] == [
+        "train_tokens_00000.npy", "train_tokens_00001.npy"]
+
+    second = ArrayShardWriter(tmp_path, "train", max_length=4, shard_size=2,
+                              shard_offset=2)
+    for _ in range(2):
+        second.write([4, 5, 0, 0], [1, 1, 0, 0])
+    more = second.close()
+    assert [p.name for p in more if "tokens" in p.name] == ["train_tokens_00002.npy"]
+    assert len(sorted(tmp_path.glob("train_tokens_*.npy"))) == 3
+
+
+def test_a_second_pass_without_an_offset_is_refused(tmp_path):
+    from dimol.data.shards import ArrayShardWriter
+
+    first = ArrayShardWriter(tmp_path, "train", max_length=4, shard_size=2)
+    first.write([1, 2, 3, 0], [1, 1, 1, 0])
+    first.close()
+
+    second = ArrayShardWriter(tmp_path, "train", max_length=4, shard_size=2)
+    second.write([4, 5, 0, 0], [1, 1, 0, 0])
+    with pytest.raises(FileExistsError, match="shard_offset"):
+        second.close()

@@ -55,8 +55,10 @@ def process_split(
     max_length: int,
     shard_size: int,
     nprocs: int,
+    shard_offset: int = 0,
 ) -> dict:
-    writer = ArrayShardWriter(out_dir, split_name, max_length=max_length, shard_size=shard_size)
+    writer = ArrayShardWriter(out_dir, split_name, max_length=max_length,
+                              shard_size=shard_size, shard_offset=shard_offset)
     stream = iter_smiles(source, upstream_split, canonicalize=False)
     dropped = 0
     lengths: list[int] = []
@@ -118,6 +120,9 @@ def main(cfg: DictConfig) -> None:
     max_length = int(prep.get("max_length", 96))
     shard_size = int(prep.get("array_shard_size", 250_000))
     nprocs = int(prep.get("nprocs") or max(1, (os.cpu_count() or 2) // 2))
+    # A corpus that arrives in batches is tokenized in several passes into one
+    # directory; the offset keeps the second pass from overwriting the first.
+    shard_offset = int(prep.get("shard_offset", 0))
 
     tokenizer = SmilesTokenizer.load(tokenizer_path)
     assert tokenizer.vocab_size <= 65535, (
@@ -132,7 +137,7 @@ def main(cfg: DictConfig) -> None:
     for out_name, upstream_split in splits.items():
         report["splits"][out_name] = process_split(
             out_name, source, upstream_split, tokenizer_path, out_dir,
-            max_length, shard_size, nprocs,
+            max_length, shard_size, nprocs, shard_offset,
         )
     report["seconds"] = round(time.time() - started, 1)
     (out_dir / "meta.json").write_text(json.dumps(report, indent=2))
