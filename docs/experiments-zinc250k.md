@@ -726,7 +726,13 @@ deviations with a KS statistic of 0.46, and the synthetic accessibility score is
 standard deviations worse. The model builds rings of the right number and the wrong kind.
 That, not validity, is the next target.
 
-## Aromaticity is a depth problem, and it is the only thing that behaves like one
+## Aromaticity is a capacity problem (this section's first reading was wrong)
+
+**Read the correction below the tables.** The depth claim in this section came from a
+comparison in which the deeper model also carried 22% more parameters, and it does not
+survive a parameter-matched series.
+
+## Aromaticity: the first reading, kept for the record
 
 The gap left after length and self-conditioning was specific: the model produced the right
 number of rings and the wrong kind, 0.8 aromatic rings against the corpus 1.85. Across the
@@ -829,3 +835,46 @@ seed to appear. Numerical nondeterminism in the backward pass is enough to send 
 different place on the length-fidelity trade-off, and nothing tried so far narrows it. The
 practical consequence stands: three seeds per configuration, and an effect is only an
 effect when the worst seed of a group beats the best seed of the reference.
+
+## The parameter-matched depth series, which corrects the section above
+
+To match parameters at greater depth the modulation width has to shrink, because adaLN
+costs `time_dim x 6 x model_dim` per block. That gives a series within 4% on parameters
+and identical FLOPs per token. Per-seed numbers, because the group means hid what matters:
+
+| shape | parameters | usable by seed | aromatic rings by seed |
+|---|---|---|---|
+| 384 x 2 | 5.17M | 8.7 7.6 14.3 | 0.65 0.73 0.86 |
+| 256 x 4 | 5.06M | 12.9 15.7 15.7 | 0.77 0.88 0.90 |
+| 256 x 4, latent 64 | 5.12M | 18.1 13.5 17.2 | 0.94 0.76 0.86 |
+| 192 x 8 | 4.88M | 16.1 17.3 10.1 | 0.97 0.87 0.55 |
+| 128 x 12 | 4.96M | 13.5 17.2 13.5 | 0.78 0.84 0.75 |
+| 128 x 16 | 4.86M | 12.8 13.6 14.7 | 0.73 0.69 0.78 |
+| 192 x 8 | 6.19M | 19.2 17.3 23.3 | **1.08 1.02 1.05** |
+| 384 x 6 | 14.62M | 21.6 29.3 21.2 | **1.02 1.22 1.05** |
+| corpus | - | - | 1.85 |
+
+**Shape does not matter and parameter count does.** The six configurations between 4.86M
+and 5.17M cover 2, 4, 8, 12 and 16 blocks and latent widths 32 and 64, and their aromatic
+ring counts all fall in 0.55 to 0.97 with every range overlapping every other. Usable
+molecules are equally flat, 13.7% to 16.3% by group mean, with only the two-block model
+clearly worse. The two models above 6M separate cleanly: their worst seed, 1.02, beats the
+best seed of every 5M configuration, 0.97, which is the only kind of separation this study
+accepts.
+
+So the earlier claim, that aromaticity is a depth phenomenon, was an artefact of the
+comparison. The 8-block winner in that table carried 22% more parameters than the
+baseline, precisely because I had left the modulation width alone; once the modulation is
+narrowed to match, 8 blocks reads 0.80 against the baseline's 0.85. Depth beyond four
+blocks buys nothing here, and neither does a wider latent.
+
+One thing sharpens the capacity result rather than weakening it: every run in this table
+took the same 17,600 steps, so the token budget per parameter is not matched. The 5M
+models saw 80 tokens per parameter, the 6.19M model 66, and the 14.62M model **28**. The
+largest model is the most undertrained of them and still has the best aromaticity, so 1.02
+to 1.22 is a lower bound on what its capacity can do.
+
+And that is where the corpus becomes the binding constraint. Training the 14.62M model to
+80 tokens per parameter needs 1.17 billion tokens, which is 231 passes over ZINC-250k, and
+this study already measured that 161 passes hurt. The capacity that fixes aromaticity
+cannot be fed by this corpus.
