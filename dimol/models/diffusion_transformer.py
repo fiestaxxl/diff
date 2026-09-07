@@ -40,6 +40,15 @@ class TransformerConfig:
     # rest, sampling feeds the estimate from the previous solver step. The extra half of
     # up_proj is initialised to zero, so a fresh model behaves exactly as before.
     self_conditioning: bool = False
+
+    # ---- readout ----
+    # The readout maps a latent back to token logits, and the latents it has to invert
+    # are the embedding table's own rows, which move throughout training: the table's
+    # norm grows about fiftyfold over a run. Tying the readout to the table makes it a
+    # dot product against the current embeddings instead of a separate matrix chasing
+    # them, which is the standard fix in language models and a candidate explanation for
+    # the run-to-run spread measured here.
+    tie_readout: bool = False
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -94,10 +103,12 @@ class DiffusionTransformer(nn.Module):
 
         self.out_proj = nn.Linear(config.emb_dim, config.vocab_size, bias=True)
         #self.out_proj = NormalizedLinear(config.emb_dim, config.vocab_size, bias=True)
-        # self.out_proj.weight = self.token_embedding.weight
 
         self.apply(self._init_params)
         self._init_special_layers()
+        if bool(getattr(config, "tie_readout", False)):
+            # one parameter, two uses: the readout is now a similarity to the embeddings
+            self.out_proj.weight = self.token_embedding.weight
         if self.self_conditioning:
             # the second input starts with no influence at all
             with torch.no_grad():

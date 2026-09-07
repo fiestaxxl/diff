@@ -116,3 +116,33 @@ def test_a_plain_model_in_the_denoiser_gets_no_extra_argument():
     wrapper = DenoiserModel(_model(False), path)
     out = wrapper(torch.randn(2, SEQ_LEN, 8), torch.full((2, 1, 1), 0.3))
     assert torch.isfinite(out).all()
+
+
+def _tied_model() -> DiffusionTransformer:
+    return DiffusionTransformer(
+        TransformerConfig(model_dim=32, emb_dim=8, time_dim=32, num_heads=4,
+                          num_text_blocks=1, vocab_size=VOCAB, pad_idx=0,
+                          max_pos=SEQ_LEN + 4, tie_readout=True)
+    )
+
+
+def test_tying_makes_the_readout_the_embedding_table():
+    tied = _tied_model()
+    assert tied.out_proj.weight is tied.token_embedding.weight
+    plain = _model(False)
+    assert plain.out_proj.weight is not plain.token_embedding.weight
+
+
+def test_a_tied_model_has_fewer_parameters():
+    tied, plain = _tied_model(), _model(False)
+    assert sum(p.numel() for p in tied.parameters()) < sum(
+        p.numel() for p in plain.parameters()
+    )
+
+
+def test_a_tied_readout_trains_through_both_uses():
+    torch.manual_seed(0)
+    model, batch = _tied_model(), _batch()
+    _task().compute_loss(model, batch)["loss"].backward()
+    assert model.token_embedding.weight.grad is not None
+    assert torch.isfinite(model.token_embedding.weight.grad).all()
