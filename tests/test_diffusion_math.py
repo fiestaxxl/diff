@@ -80,3 +80,37 @@ def test_p_simple_sampling_is_seeded() -> None:
     c = path.p_simple.sample(2, seed=2)
     assert torch.allclose(a, b)
     assert not torch.allclose(a, c)
+
+
+def test_time_grids_keep_the_endpoints_and_the_step_count():
+    from dimol.eval.sampling import SamplingParams, _time_grid
+
+    for grid in ("uniform", "data_dense", "noise_dense", "mid_dense", "ends_dense"):
+        ts = _time_grid(SamplingParams(num_timesteps=50, t_start=1e-3, t_end=0.999,
+                                       time_grid=grid))
+        assert ts.numel() == 50, grid
+        assert abs(float(ts[0]) - 1e-3) < 1e-6, grid
+        assert abs(float(ts[-1]) - 0.999) < 1e-6, grid
+        assert bool((ts[1:] - ts[:-1] > 0).all()), grid
+
+
+def test_dense_grids_lean_the_way_they_say():
+    import torch
+
+    from dimol.eval.sampling import SamplingParams, _time_grid
+
+    def spacing(grid):
+        ts = _time_grid(SamplingParams(num_timesteps=101, time_grid=grid))
+        d = ts[1:] - ts[:-1]
+        return float(d[:50].mean()), float(d[50:].mean())
+
+    near_noise, near_data = spacing("data_dense")
+    assert near_noise > near_data  # small steps at the data end
+    near_noise, near_data = spacing("noise_dense")
+    assert near_noise < near_data
+    mid = _time_grid(SamplingParams(num_timesteps=101, time_grid="mid_dense"))
+    d = mid[1:] - mid[:-1]
+    assert float(d[45:55].mean()) < float(d[:10].mean())  # dense in the middle
+    ends = _time_grid(SamplingParams(num_timesteps=101, time_grid="ends_dense"))
+    d = ends[1:] - ends[:-1]
+    assert float(d[45:55].mean()) > float(d[:10].mean())  # dense at both ends

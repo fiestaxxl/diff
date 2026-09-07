@@ -32,6 +32,42 @@ class SamplingParams:
     clamp_strength: float = 0.0   # pull the x0 estimate onto the nearest token embedding
     clamp_from_alpha: float = 0.5  # only once the estimate carries information
     decode: str = "argmax"        # argmax | grammar (see dimol/eval/decoding.py)
+    time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
+    time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
+
+
+def _time_grid(params: SamplingParams) -> torch.Tensor:
+    """The t values the solver stops at, from noise (t_start) to data (t_end).
+
+    The default is the original uniform grid. The others keep the same endpoints and the
+    same number of steps but redistribute them, so the solver takes small steps where
+    the trajectory moves fastest or where the score is least accurate. Which region that
+    is depends on the model, so this is a knob and not a decision.
+    """
+    n = params.num_timesteps
+    u = torch.linspace(0.0, 1.0, n)
+    power = max(float(params.time_grid_power), 1e-3)
+    kind = params.time_grid
+    if kind == "uniform":
+        pass
+    elif kind == "data_dense":
+        u = 1.0 - (1.0 - u) ** power  # small steps near t_end, the data end
+    elif kind == "noise_dense":
+        u = u**power  # small steps near t_start, the noise end
+    elif kind == "mid_dense":
+        # small steps in the middle, where a logit-normal training density puts most of
+        # its mass, and coarse steps at both ends
+        v = 2.0 * u - 1.0
+        u = 0.5 + 0.5 * v.sign() * v.abs() ** power
+    elif kind == "ends_dense":
+        # the mirror image: coarse in the middle, small steps at both ends, where the
+        # score is least well trained
+        z = torch.erfinv(2.0 * u.clamp(1e-6, 1 - 1e-6) - 1.0) * (2.0**0.5)
+        u = torch.sigmoid(z * power)
+        u = (u - u[0]) / (u[-1] - u[0])
+    else:
+        raise ValueError(f"generate.time_grid={kind!r} is unknown")
+    return params.t_start + (params.t_end - params.t_start) * u
 
 
 @torch.no_grad()
@@ -65,7 +101,7 @@ def sample_smiles(
         b = min(batch_size, params.num_samples - done)
         x0 = path.p_simple.sample(b, seed=params.seed + done)
         ts = (
-            torch.linspace(params.t_start, params.t_end, params.num_timesteps)
+            _time_grid(params)
             .view(1, params.num_timesteps, 1, 1)
             .expand(b, -1, -1, -1)
             .to(device)

@@ -59,6 +59,8 @@ def main(cfg: DictConfig) -> None:
         clamp_strength=float(gen.get("clamp_strength", 0.0)),
         clamp_from_alpha=float(gen.get("clamp_from_alpha", 0.5)),
         decode=str(gen.get("decode", "argmax")),
+        time_grid=str(gen.get("time_grid", "uniform")),
+        time_grid_power=float(gen.get("time_grid_power", 2.0)),
     )
 
     print("generating...")
