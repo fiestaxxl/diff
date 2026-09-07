@@ -64,22 +64,28 @@ def main() -> None:
         report = evaluate_distribution(smiles, reference,
                                        with_fcd=not args.no_fcd, device=args.device)
         report["attempts"] = len(smiles)
-        reports[path.stem if path.stem != "samples" else path.parent.name] = report
+        # the same run appears under several decoders, so the pool directory is part of
+        # the key: keying on the basename alone silently kept only the last one
+        label = f"{path.parent.name}/{path.stem}"
+        reports[label] = report
         print(format_distribution(report, name=str(path)))
         print()
 
     if len(reports) > 1:
-        print(f"{'set':<26}{'FCD':>8}{'trivial':>9}{'scaffolds':>11}"
-              f"{'heavy atoms':>14}{'rings':>9}{'weight':>9}")
-        for name, r in sorted(reports.items(), key=lambda kv: kv[1].get("fcd", float("inf"))):
+        print(f"{'set':<34}{'usable':>9}{'FCD':>8}{'trivial':>9}{'scaffolds':>11}"
+              f"{'heavy atoms':>14}{'rings':>8}{'weight':>8}")
+        for name, r in sorted(reports.items(), key=lambda kv: -kv[1]["usable"]["rate"]):
             d = r["descriptors"]
             fcd_value = r.get("fcd", float("nan"))
-            print(f"{name:<26}{fcd_value:>8.2f}{r['trivial']['trivial'] * 100:>8.1f}%"
+            print(f"{name:<34}{r['usable']['rate'] * 100:>8.2f}%{fcd_value:>8.2f}"
+                  f"{r['trivial']['trivial'] * 100:>8.1f}%"
                   f"{r['scaffolds']['scaffolds']:>11.0f}"
                   f"{d['heavy_atoms']['sample_mean']:>10.1f}"
                   f"{d['heavy_atoms']['shift_sigma']:>+5.1f}s"
-                  f"{d['rings']['sample_mean']:>9.2f}"
-                  f"{d['mol_weight']['sample_mean']:>9.0f}")
+                  f"{d['rings']['sample_mean']:>8.2f}"
+                  f"{d['mol_weight']['sample_mean']:>8.0f}")
+        print("usable = distinct, valid, at least 10 heavy atoms and one ring, no bracket")
+        print("atom the corpus never uses, as a share of all attempts")
         print("trivial = under 10 heavy atoms or no ring; s = shift in corpus sigmas")
 
     if args.json:

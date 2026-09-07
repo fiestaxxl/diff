@@ -603,3 +603,49 @@ Two attempts to reduce the variance failed. A four-times longer warmup lowers th
 8.44% and keeps the spread. A halved peak learning rate leaves both the mean and the
 spread where they were. So the instability is not obviously an optimisation artefact, and
 finding its source is the open question this study ends on.
+
+## Was the validity bought by generating simpler molecules? Yes, partly
+
+This section exists because validity on its own is gameable in three ways, and this study
+hit all three. `dimol/eval/distribution.py` measures the rest: thirteen descriptors
+against the corpus in units of its own standard deviation, Bemis-Murcko scaffold counts,
+the share of molecules a chemist would throw out, bracket atoms the corpus never uses, and
+the Frechet ChemNet Distance. The headline number becomes **usable**: distinct, valid, at
+least ten heavy atoms, at least one ring, no invented atom, counted per attempt.
+
+Reference for all of it: the ZINC-250k validation split, 23.2 heavy atoms, 2.7 rings, 330
+daltons on average, and no molecule without a ring.
+
+| set | usable | FCD | trivial | scaffolds | heavy atoms | rings | weight |
+|---|---|---|---|---|---|---|---|
+| reference + closing repair | 13.20% | **14.41** | **2.6%** | 224 | 20.5 (-0.6s) | **2.48** | 295 |
+| logit-normal + CE 3 + closing | **21.53%** | 18.62 | 36.1% | 216 | 14.2 (-1.9s) | 0.84 | 204 |
+| logit-normal + CE 3 + mixed | 20.13% | 20.22 | 59.4% | 138 | 11.7 (-2.5s) | 0.50 | 170 |
+| logit-normal + padding 0.6 + closing | 20.00% | 23.41 | 54.7% | 136 | 12.6 (-2.3s) | 0.54 | 180 |
+| reference + argmax | 4.60% | - | 5.4% | 145 | 19.1 (-0.9s) | 1.90 | 277 |
+
+Three things follow, and two of them are corrections to earlier claims in this document.
+
+The repair decoder survives the check. On the reference model, closing repair raises usable
+molecules from 4.60% to 13.20% of attempts while leaving the molecules alone: 2.6% trivial,
+20.5 heavy atoms against the corpus 23.2, 2.48 rings against 2.7. That is a real 2.9x, not
+the 7x that raw validity suggested, and it is honest. Mixed repair is not: it trims to
+fragments, 59.4% trivial, and both its FCD and its scaffold count get worse.
+
+The timestep result is real but half of it is simplification. Usable molecules go from
+13.20% to 21.53%, a 63% relative gain, so something genuine is there. But the same model
+generates 14.2 heavy atoms instead of 20.5, 0.84 rings instead of 2.48, and 36% of its
+output is trivial, and its FCD is 29% worse than the reference. Validity went up 2.7x and
+usable molecules only 1.6x, and the difference is exactly the simplification the check was
+built to find.
+
+The padding-weight configuration was gaming length outright. It had the highest raw
+validity of anything measured, 47.79%, and it is the worst row here: 54.7% trivial, the
+worst FCD, the fewest scaffolds. Down-weighting padding in the loss reduces the pressure
+to fill the canvas, the model terminates early, short strings are easier to make valid,
+and validity rises while the molecules get worse. It is dropped.
+
+Absolute FCD is 14 to 23 across the board, where a good model on this kind of corpus is
+under 1. At 5M parameters and 80 tokens per parameter that is expected, and it is the
+number to watch when the model is scaled, because it is the one that says whether the
+distribution is being learned at all.

@@ -180,15 +180,74 @@ def trivial_share(columns: Dict[str, List[float]],
     return {"tiny": tiny / n, "acyclic": acyclic / n, "trivial": both / n}
 
 
+BRACKET_ATOM = None  # compiled on first use
+
+
+def bracket_atoms(smiles: Sequence[str]) -> Dict[str, int]:
+    """Every bracket atom token in a set of SMILES, with counts."""
+    global BRACKET_ATOM
+    if BRACKET_ATOM is None:
+        import re
+
+        BRACKET_ATOM = re.compile(r"\[[^\]]+\]")
+    counts: Dict[str, int] = {}
+    for smi in smiles:
+        for token in BRACKET_ATOM.findall(smi or ""):
+            counts[token] = counts.get(token, 0) + 1
+    return counts
+
+
+def bracket_report(sample_canonical: Sequence[str],
+                   reference_canonical: Sequence[str]) -> Dict[str, object]:
+    """Bracket atoms the corpus never contains, and how many molecules carry one.
+
+    This is the cheapest test for chemistry the model made up. A corpus like ZINC-250k
+    uses a small closed set of bracket atoms, charged nitrogens and stereocentres mostly,
+    so a generated [CH] or a bare [P] is not a rare molecule, it is a wrong one. Counted
+    on canonical strings, so rdkit has already normalised the spelling.
+    """
+    known = set(bracket_atoms(reference_canonical))
+    counts = bracket_atoms(sample_canonical)
+    unseen = {token: n for token, n in counts.items() if token not in known}
+    carriers = 0
+    for smi in sample_canonical:
+        if any(token not in known for token in bracket_atoms([smi])):
+            carriers += 1
+    n = max(len(sample_canonical), 1)
+    top = sorted(unseen.items(), key=lambda kv: -kv[1])[:8]
+    return {
+        "unseen_kinds": len(unseen),
+        "unseen_total": sum(unseen.values()),
+        "molecules_with_unseen": carriers / n,
+        "top_unseen": top,
+        "reference_kinds": len(known),
+    }
+
+
+def roundtrip_safe(smiles: Sequence[str]) -> List[str]:
+    """Keep only strings rdkit can read back after writing them.
+
+    rdkit can emit a canonical SMILES it then refuses to parse, usually an aromatic ring
+    that will not kekulize on the way in. Anything downstream that re-parses, the ChemNet
+    distance included, chokes on those, so they are filtered out explicitly rather than
+    crashing a metric run.
+    """
+    from rdkit import Chem, RDLogger
+
+    RDLogger.DisableLog("rdApp.*")
+    return [s for s in smiles if s and Chem.MolFromSmiles(s) is not None]
+
+
 def fcd(sample_canonical: Sequence[str], reference_canonical: Sequence[str],
         device: str = "cpu", n_jobs: int = 1) -> float:
     """Frechet ChemNet Distance. Lower is closer; identical sets give 0."""
-    if len(sample_canonical) < 2 or len(reference_canonical) < 2:
+    sample = roundtrip_safe(sample_canonical)
+    reference = roundtrip_safe(reference_canonical)
+    if len(sample) < 2 or len(reference) < 2:
         return float("nan")
     from fcd_torch import FCD
 
-    return float(FCD(device=device, n_jobs=n_jobs)(list(sample_canonical),
-                                                   list(reference_canonical)))
+    return float(FCD(device=device, n_jobs=n_jobs)(sample, reference))
 
 
 def scaffold_metrics(sample: Dict[str, object], reference: Dict[str, object]) -> Dict[str, float]:
@@ -204,11 +263,56 @@ def scaffold_metrics(sample: Dict[str, object], reference: Dict[str, object]) ->
     }
 
 
+def usable_molecules(sample_smiles: Sequence[str], reference_canonical: Sequence[str],
+                     min_heavy_atoms: int = 10, min_rings: int = 1) -> Dict[str, object]:
+    """Distinct molecules that a chemist would accept, as a share of all attempts.
+
+    Validity on its own is gameable in three ways at once, and this study hit all three:
+    a repair mode can trim molecules down to fragments, a loss change can make the model
+    terminate early, and a decoder can insert atoms that the corpus never contains. A
+    molecule counts here only if it parses, is distinct, has at least ten heavy atoms and
+    one ring, and uses no bracket atom absent from the reference. The denominator is the
+    number of attempts, so nothing is hidden by dropping empty outputs.
+    """
+    from rdkit import Chem, RDLogger
+
+    RDLogger.DisableLog("rdApp.*")
+    known_brackets = set(bracket_atoms(reference_canonical))
+    seen: set = set()
+    rejected = {"invalid": 0, "duplicate": 0, "too_small": 0, "unseen_atom": 0}
+    for smi in sample_smiles:
+        if not smi:
+            rejected["invalid"] += 1
+            continue
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            rejected["invalid"] += 1
+            continue
+        canonical = Chem.MolToSmiles(mol)
+        if canonical in seen:
+            rejected["duplicate"] += 1
+            continue
+        from rdkit.Chem import rdMolDescriptors
+
+        if (mol.GetNumHeavyAtoms() < min_heavy_atoms
+                or rdMolDescriptors.CalcNumRings(mol) < min_rings):
+            rejected["too_small"] += 1
+            continue
+        if any(token not in known_brackets for token in bracket_atoms([canonical])):
+            rejected["unseen_atom"] += 1
+            continue
+        seen.add(canonical)
+    attempts = max(len(sample_smiles), 1)
+    return {"count": len(seen), "attempts": attempts, "rate": len(seen) / attempts,
+            "rejected": rejected}
+
+
 def evaluate_distribution(sample_smiles: Sequence[str], reference_smiles: Sequence[str],
                           with_fcd: bool = True, device: str = "cpu") -> Dict[str, object]:
     sample = describe(sample_smiles)
     reference = describe(reference_smiles)
     report: Dict[str, object] = {
+        "usable": usable_molecules(sample_smiles, reference["canonical"]),
         "n_valid": len(sample["canonical"]),
         "n_described": len(sample["columns"]["heavy_atoms"]),
         "n_undescribed": sample["undescribed"],
@@ -216,8 +320,11 @@ def evaluate_distribution(sample_smiles: Sequence[str], reference_smiles: Sequen
         "descriptors": compare_descriptors(sample["columns"], reference["columns"]),
         "trivial": trivial_share(sample["columns"]),
         "scaffolds": scaffold_metrics(sample, reference),
+        "brackets": bracket_report(sample["canonical"], reference["canonical"]),
     }
     if with_fcd:
+        safe = roundtrip_safe(sample["canonical"])
+        report["n_fcd"] = len(safe)
         report["fcd"] = fcd(sample["canonical"], reference["canonical"], device=device)
     return report
 
@@ -226,15 +333,26 @@ def format_distribution(report: Dict[str, object], name: str = "") -> str:
     lines = []
     head = f"=== {name}" if name else "==="
     lines.append(head)
+    u = report["usable"]
+    lines.append(f"usable molecules:          {u['count']} of {u['attempts']} attempts"
+                 f"   ({u['rate'] * 100:.2f}%)")
+    lines.append("  rejected: " + ", ".join(f"{k} {v}" for k, v in u["rejected"].items()))
     lines.append(f"valid molecules:           {report['n_valid']}")
     lines.append(f"of them fully described:   {report['n_described']}"
                  f"   ({report['n_undescribed']} rejected by a descriptor)")
     if "fcd" in report:
-        lines.append(f"FCD vs reference:          {report['fcd']:.3f}   (0 = same distribution)")
+        lines.append(f"FCD vs reference:          {report['fcd']:.3f}"
+                     f"   (0 = same distribution, on {report.get('n_fcd', 0)} molecules)")
     triv = report["trivial"]
     lines.append(f"too small (<10 heavy):     {triv['tiny'] * 100:.2f}%")
     lines.append(f"no ring at all:            {triv['acyclic'] * 100:.2f}%")
     lines.append(f"trivial by either rule:    {triv['trivial'] * 100:.2f}%")
+    br = report["brackets"]
+    lines.append(f"molecules with a bracket atom the corpus never uses: "
+                 f"{br['molecules_with_unseen'] * 100:.2f}%"
+                 f"  ({br['unseen_kinds']} kinds against {br['reference_kinds']} known)")
+    if br["top_unseen"]:
+        lines.append("  most common: " + ", ".join(f"{t} x{n}" for t, n in br["top_unseen"]))
     sc = report["scaffolds"]
     lines.append(f"distinct scaffolds:        {sc['scaffolds']:.0f}"
                  f"  ({sc['scaffolds_per_valid'] * 100:.1f}% of valid,"

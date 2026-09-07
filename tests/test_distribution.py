@@ -77,3 +77,57 @@ def test_a_molecule_that_parses_but_breaks_a_descriptor_is_counted_not_crashed()
     report = evaluate_distribution(["CCO", awkward, "c1ccccc1"], DRUGLIKE, with_fcd=False)
     assert report["n_valid"] == 3 and report["n_described"] == 2
     assert report["n_undescribed"] == 1
+
+
+def test_bracket_atoms_the_corpus_never_uses_are_flagged():
+    from dimol.eval.distribution import bracket_report
+
+    corpus = ["C[NH+](C)C", "c1cc[nH]c1", "CC(=O)[O-]"]
+    generated = ["C[NH+](C)C", "CC[P]C", "C[CH]C", "CC(=O)[O-]"]
+    out = bracket_report(generated, corpus)
+    assert out["unseen_kinds"] == 2
+    assert abs(out["molecules_with_unseen"] - 0.5) < 1e-9
+    assert dict(out["top_unseen"]).keys() == {"[P]", "[CH]"}
+
+
+def test_a_set_drawn_from_the_corpus_flags_nothing():
+    from dimol.eval.distribution import bracket_report
+
+    corpus = ["C[NH+](C)C", "c1cc[nH]c1"]
+    out = bracket_report(["C[NH+](C)C"], corpus)
+    assert out["unseen_kinds"] == 0 and out["molecules_with_unseen"] == 0.0
+
+
+def test_fcd_input_is_filtered_to_strings_rdkit_can_read_back():
+    from dimol.eval.distribution import roundtrip_safe
+
+    awkward = "Cc1ccc(C)n(C(C)C)c2[nH]c1=CC=CC=CC=NC1COCCN21"
+    kept = roundtrip_safe(["CCO", awkward, "", "c1ccccc1"])
+    assert kept == ["CCO", "c1ccccc1"]
+
+
+def test_usable_counts_only_molecules_a_chemist_would_accept():
+    from dimol.eval.distribution import usable_molecules
+
+    corpus = ["C[NH+](C)C", "c1ccc2[nH]c3ccccc3c2c1"]
+    attempts = [
+        "CC(=O)Nc1ccc(O)cc1",   # fine
+        "CC(=O)Nc1ccc(O)cc1",   # duplicate
+        "CCO",                  # too small, no ring
+        "CC(=O)Nc1ccc(O)cc1[P]",  # bracket atom the corpus never uses
+        "not-a-molecule",       # invalid
+        "",                     # empty
+        "COc1cc2c(cc1OC)CCN(C)C2",  # fine
+    ]
+    out = usable_molecules(attempts, corpus)
+    assert out["count"] == 2
+    assert out["attempts"] == 7
+    assert out["rejected"] == {"invalid": 2, "duplicate": 1, "too_small": 1,
+                               "unseen_atom": 1}
+
+
+def test_usable_is_a_share_of_attempts_not_of_valid_strings():
+    from dimol.eval.distribution import usable_molecules
+
+    out = usable_molecules(["CC(=O)Nc1ccc(O)cc1"] + [""] * 9, ["CCO"])
+    assert out["count"] == 1 and abs(out["rate"] - 0.1) < 1e-9
