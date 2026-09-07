@@ -568,10 +568,13 @@ reference. Adding a heavier cross-entropy on top does not just raise the mean, i
 the spread: 60.29% and 60.38% on two seeds is tighter than the reference's own two seeds.
 Sphere corruption behaves the same way, 63.08% and 66.02%.
 
-So the configuration to carry forward is not the timestep change alone but the timestep
-change with the readout weighted up, and the reason to prefer it is stability as much as
-the mean. On argmax the same group reads 16.48% over three seeds, range 13.99-18.82,
-against 5.55-6.19% for the reference.
+So the configuration to carry forward looked like the timestep change with the readout
+weighted up, preferred for stability as much as for the mean.
+
+**Corrected by the next wave, see the final aggregate below.** Two more seeds of that
+configuration read 10.58% and 9.50% on argmax, which widens its range to 9.50-18.82,
+exactly as wide as the plain configuration's. The apparent stability was two draws that
+happened to land together. Nothing added to the timestep change separates from it.
 
 ## The final aggregate, three seeds where it matters
 
