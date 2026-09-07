@@ -120,3 +120,27 @@ That is what the corpus was blocking. ZINC-250k is 5.06M tokens per epoch, so 14
 parameters at 80 tokens per parameter is 231 passes and we measured that 161 passes hurt.
 ZINC-20 is a billion molecules, about 22.6B tokens, which is 0.64 passes for a 180M model
 at the same budget.
+
+## Running long jobs on the shared node
+
+Two things about sr008 cost real work in this session and are worth writing down.
+
+A background job started over ssh dies with the session. `nohup` does not save it and
+neither does `setsid`; the curation pass over ZINC-20 was lost at 99% that way, and the
+tokenization chain after it went the same way. Long jobs go under `tmux`:
+
+    tmux new-session -d -s tok20 "bash scratch/tokenize20.sh > scratch/tokenize20.log 2>&1"
+
+`ps` and `pgrep` on that node do not list one's own processes, so liveness is judged by
+output and by files growing, not by the process table. A job that looks dead usually is
+not, and a job that looks alive sometimes is not: check the shard count twice, a minute
+apart.
+
+The node is shared and capped at 16 cores for us. Everything goes through
+`scratch/cap16.sh`, which sets the OMP, MKL, OpenBLAS, NumExpr and torch thread limits
+before exec'ing the command. Torch on the login node otherwise takes all 176.
+
+And a killed `torchrun` leaves its workers spinning at 100% on every GPU. They do not
+appear in `ps`, they do appear in `nvidia-smi --query-compute-apps`, and until they are
+killed every timing measurement is wrong by a factor of three to six. Benchmarks now kill
+their own leftovers and check that the GPUs are idle before starting.
