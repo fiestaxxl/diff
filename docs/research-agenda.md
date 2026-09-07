@@ -92,3 +92,30 @@ attention over the canvas, a linear projection in and out of the 32-dimensional 
 | learned absolute positions instead of RoPE | open | the canvas is fixed and short, relative positions may not be what matters |
 | normalized readout (the unused NormalizedLinear) | open | the embedding norms grow 50x, so the logit scale drifts |
 | a second readout head predicting the ring-digit parity | open | supervise the bookkeeping the model actually fails at |
+
+
+## Status after the September screening
+
+Settled, with a positive difference at fixed size and budget:
+
+* the timestep distribution (logit-normal instead of uniform) is the one large
+  training-side effect;
+* grammar repair at decoding time is the one large generation-side effect, and it is free;
+* the stochastic sampler at full noise with 100 solver steps is as good as 1000, so
+  generation got three times cheaper.
+
+Settled negative, with the reason understood, so they should not be retried as written:
+weight averaging, random-traversal augmentation, min-SNR weighting, padding masking in
+either place, clamping the x0 estimate, x0 parameterisation, Laplace and mixup corruption
+of x0, unit-norm embeddings.
+
+Still open, in the order they look worth running:
+
+1. self-conditioning: feed the previous x0 estimate back as an extra input;
+2. cross-entropy supervision on padding, now implemented as loss.ce_include_pad;
+3. the sampling time grid, now implemented as generate.time_grid;
+4. a length-prediction head, so the canvas is not filled blindly;
+5. valence-aware decoding on top of the grammar repair, which owns most of the remaining
+   invalid strings;
+6. depth against width at fixed parameters;
+7. the second seed on every modest positive from the loss-shaping wave.
