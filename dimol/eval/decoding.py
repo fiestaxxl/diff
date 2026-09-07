@@ -6,11 +6,17 @@ from: measured on ZINC-250k, 88% of the failures are unbalanced parentheses or a
 number of ring-closure digits, i.e. violations of a grammar that is entirely known in
 advance and has nothing to do with chemistry knowledge.
 
-``GrammarConstrainedDecoder`` walks the positions left to right and, at each one, takes
-the most likely token among those that keep the string completable: parentheses never go
-negative, a molecule never ends with an open branch or an unpaired ring digit, and there
-is always room left on the canvas to close what is open. The model is untouched; only
-the argmax is replaced by an argmax over a feasible set.
+``GrammarConstrainedDecoder`` walks the positions left to right and repairs the string as
+it goes: a token that would drive the parenthesis depth below zero is not written, and a
+string that ends with something open is closed or trimmed.
+
+What the repair must never do is invent chemistry. An earlier version, when the model
+asked for an impossible ")", fell back to the next most likely token, and the next most
+likely token is often an atom: strings came out with a phosphorus atom inserted where a
+parenthesis had been, which rdkit accepts and a chemist would not. ``substitution="skip"``,
+the default, drops the impossible token instead and keeps every other choice the model
+made. ``substitution="next_best"`` is the old behaviour, kept only so the difference can
+be measured.
 """
 from __future__ import annotations
 
@@ -48,13 +54,19 @@ def _token_grammar(token: str) -> tuple[int, int, np.ndarray]:
 class GrammarConstrainedDecoder:
     """Greedy left-to-right decoding over a feasible token set."""
 
-    def __init__(self, tokenizer, canvas: int, top_k: int = 16, repair: str = "close"):
+    def __init__(self, tokenizer, canvas: int, top_k: int = 16, repair: str = "close",
+                 substitution: str = "skip"):
         vocab = tokenizer.get_vocab()
         self.canvas = int(canvas)
         self.top_k = int(top_k)
         if repair not in ("trim", "close", "mixed"):
             raise ValueError(f"repair={repair!r}; expected 'trim', 'close' or 'mixed'")
         self.repair = repair
+        if substitution not in ("skip", "next_best"):
+            raise ValueError(
+                f"substitution={substitution!r}; expected 'skip' or 'next_best'"
+            )
+        self.substitution = substitution
         self.vocab_size = max(vocab.values()) + 1
         self.id_to_token: Dict[int, str] = {i: t for t, i in vocab.items()}
 
@@ -95,9 +107,8 @@ class GrammarConstrainedDecoder:
         The model decides the content and the length: its argmax is taken as the
         intended token per position, and the intended end of the molecule is the first
         position where it wants a special token. Inside that prefix the grammar only
-        repairs: a token that would push the parenthesis depth below zero is replaced by
-        the best alternative among the top candidates, and if the string still ends with
-        something open it is trimmed back to the last point where nothing was.
+        repairs: a token that would push the parenthesis depth below zero is dropped, and
+        if the string still ends with something open it is closed or trimmed.
         """
         batch, length, vocab = logits.shape
         vocab = min(vocab, self.vocab_size)
@@ -118,17 +129,22 @@ class GrammarConstrainedDecoder:
                     break  # the model wants to end the molecule here
                 if self.is_special[intended]:
                     continue  # <bos> and friends carry no content
-                chosen = None
-                for cand in order[i, pos]:
-                    cand = int(cand)
-                    if self.is_special[cand]:
+                if depth + int(self.lowest[intended]) >= 0:
+                    chosen = intended  # the model's choice is legal, take it
+                elif self.substitution == "skip":
+                    continue  # illegal here: drop it and keep the rest of the string
+                else:
+                    chosen = None
+                    for cand in order[i, pos]:
+                        cand = int(cand)
+                        if self.is_special[cand]:
+                            continue
+                        if depth + int(self.lowest[cand]) < 0:
+                            continue
+                        chosen = cand
+                        break
+                    if chosen is None:
                         continue
-                    if depth + int(self.lowest[cand]) < 0:
-                        continue  # would close a branch that was never opened
-                    chosen = cand
-                    break
-                if chosen is None:
-                    continue  # nothing usable here, skip the position
                 pieces.append(self.id_to_token[chosen])
                 depth += int(self.delta[chosen])
                 parity ^= self.parity[chosen]
@@ -160,14 +176,23 @@ class GrammarConstrainedDecoder:
 
 
 def build_decoder(tokenizer, canvas: int, mode: str = "argmax") -> Optional[GrammarConstrainedDecoder]:
+    """Modes are `argmax`, `grammar_close|trim|mixed`, plus a `_subst` suffix.
+
+    The suffix selects the old substituting behaviour, e.g. `grammar_close_subst`, which
+    exists only to measure how much of the validity it was buying by inserting atoms the
+    model never asked for.
+    """
     if mode == "argmax":
         return None
-    if mode in ("grammar", "grammar_close"):
-        return GrammarConstrainedDecoder(tokenizer, canvas, repair="close")
-    if mode == "grammar_trim":
-        return GrammarConstrainedDecoder(tokenizer, canvas, repair="trim")
-    if mode == "grammar_mixed":
-        return GrammarConstrainedDecoder(tokenizer, canvas, repair="mixed")
-    raise ValueError(
-        f"generate.decode={mode!r}; expected 'argmax', 'grammar_close' or 'grammar_trim'"
-    )
+    substitution = "skip"
+    if mode.endswith("_subst"):
+        substitution, mode = "next_best", mode[: -len("_subst")]
+    repairs = {"grammar": "close", "grammar_close": "close",
+               "grammar_trim": "trim", "grammar_mixed": "mixed"}
+    if mode not in repairs:
+        raise ValueError(
+            f"generate.decode={mode!r}; expected 'argmax', 'grammar_close', "
+            "'grammar_trim', 'grammar_mixed', optionally with a '_subst' suffix"
+        )
+    return GrammarConstrainedDecoder(tokenizer, canvas, repair=repairs[mode],
+                                     substitution=substitution)
