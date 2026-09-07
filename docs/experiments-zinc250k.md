@@ -319,3 +319,45 @@ direction: the token-level terms want to run on the cleanest states, not on more
 Both padding-weight rows and both cross-entropy-weight rows land within a point of each
 other above the reference, close enough that they need a second seed before any of them
 is called a real effect.
+
+## The timestep distribution, refined
+
+The reference row is the correct control for the whole study: same size, same 17,600
+steps, grammar loss off, seed 42. It reads 6.19%, not the 5.28% of the budget sweep,
+because the sweep still carried the grammar term. Every delta below is against 6.19%.
+
+| run | timestep distribution and extras | validity |
+|---|---|---|
+| r_tl0_ce3 | logit-normal, cross-entropy weight 3.0 | **16.62%** |
+| r_tl0_lr6e3 | logit-normal, learning rate 6e-3 | 14.70% |
+| r_tl0_emb16 | logit-normal, latent width 16 | 13.73% |
+| r_tlogit0 / r_tl0_s43 | logit-normal, seeds 42 and 43 | 13.55% / 13.71% |
+| r_tls07 | logit-normal, std 0.7 | 12.50% |
+| r_tl0_sphere | logit-normal, sphere corruption | 12.25% |
+| r_tlp05 | logit-normal centred at +0.5 | 10.95% |
+| r_tlm05_emb16 | centred at -0.5, latent width 16 | 9.19% |
+| r_tlm05 | logit-normal centred at -0.5 | 7.85% |
+| r_tl0_bud160 | logit-normal, twice the budget (35,200 steps) | 7.23% |
+| r_base80 | uniform, the reference | 6.19% |
+| r_tls15 | logit-normal, std 1.5 | 5.85% |
+| r_tlogit1 | logit-normal centred at +1.0 | 4.95% |
+
+Three things come out of this table.
+
+The effect replicates across seeds, 13.55% and 13.71%, so the 7.4-point gain over the
+reference is real and roughly 2.2x relative. The distribution has a single optimum at
+mean 0 and standard deviation 1, falling off in every direction tried: 0.7 costs a
+point, 1.5 costs everything, and shifting the centre either way costs three to nine
+points. That is a narrow peak, which is worth saying out loud, because it means the
+knob has to be tuned rather than switched on.
+
+Raising the cross-entropy weight on top of it is worth another three points, well beyond
+what the same change gives on its own, which was half a point. The readout has to invert
+a latent geometry that the timestep change alters, so the two are not independent knobs.
+
+The last row is the surprise: with logit-normal timesteps, doubling the budget from 80 to
+160 tokens per parameter takes validity from 13.55% down to 7.23%. Under uniform
+timesteps the same doubling raised it from 5.28% to 9.69%. Both runs are 161 epochs over
+a 224k-molecule corpus, so this is the point where repetition starts to hurt, and the
+mid-noise-heavy schedule reaches it sooner. The gain is a short-budget effect, and any
+claim about it has to name the budget it was measured at.
