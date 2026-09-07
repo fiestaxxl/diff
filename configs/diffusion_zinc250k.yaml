@@ -123,6 +123,14 @@ loss:
                                # turn this on here: the cross-entropy and reconstruction
                                # terms are gated to high-SNR steps, so capping them
                                # removes the token-level supervision (0.47% vs 5.28%)
+  gate_mode: threshold         # threshold = original: the cross-entropy and the
+                               # reconstruction term run on the samples whose alpha
+                               # exceeds the thresholds below, so the share of a batch
+                               # they see fluctuates and shifts with the timestep density.
+                               # topk takes a fixed share of every batch instead, which
+                               # makes the token-level supervision per step deterministic
+  gate_fraction: 0.41          # that share, used only by gate_mode=topk. 0.41 is what
+                               # alpha > 0.8 selects on average under uniform timesteps
   self_cond_prob: 0.5          # share of steps that get the self-conditioning pass, and
                                # it must stay below 1: the model has to work with a zeroed
                                # second input too, because the first solver step has no

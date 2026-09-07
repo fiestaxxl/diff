@@ -179,6 +179,8 @@ def build_task(
             "mask_padding": loss_cfg.get("mask_padding", "none"),
             "pad_weight": float(loss_cfg.get("pad_weight", 1.0)),
             "self_cond_prob": float(loss_cfg.get("self_cond_prob", 0.5)),
+            "gate_mode": str(loss_cfg.get("gate_mode", "threshold")),
+            "gate_fraction": float(loss_cfg.get("gate_fraction", 0.41)),
             "ce_include_pad": bool(loss_cfg.get("ce_include_pad", False)),
             "min_snr_gamma": (
                 None

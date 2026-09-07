@@ -84,6 +84,8 @@ class DiffusionTask(Task):
         mask_padding: str = "none",
         pad_weight: float = 1.0,
         self_cond_prob: float = 0.5,
+        gate_mode: str = "threshold",
+        gate_fraction: float = 0.41,
         ce_include_pad: bool = False,
         min_snr_gamma: Optional[float] = None,
         decoder_pretrain_steps: int = 0,
@@ -144,6 +146,20 @@ class DiffusionTask(Task):
         # with that estimate fed back. The first pass costs one extra forward and no
         # backward, and the gradient never flows through it.
         self.self_cond_prob = float(self_cond_prob)
+        # The cross-entropy and the reconstruction term run only on the low-noise part of
+        # the batch, selected by alpha > threshold. How much of a batch that is depends on
+        # the timestep draw, so it varies from step to step and shifts when the timestep
+        # density changes: under uniform time about 41% of samples qualify, under
+        # logit-normal about 36%, and the count fluctuates around that. "topk" instead
+        # takes a fixed share of every batch, the highest-alpha samples, which makes the
+        # amount of token-level supervision per step deterministic. It is the remaining
+        # suspect for the run-to-run spread.
+        if gate_mode not in ("threshold", "topk"):
+            raise ValueError(f"loss.gate_mode={gate_mode!r}; expected 'threshold' or 'topk'")
+        self.gate_mode = gate_mode
+        if not 0.0 < float(gate_fraction) <= 1.0:
+            raise ValueError(f"loss.gate_fraction={gate_fraction!r} must be in (0, 1]")
+        self.gate_fraction = float(gate_fraction)
         # The original cross-entropy ignores padding, so the readout is never told to
         # emit it. On a fixed canvas padding is the only way a molecule can end, and the
         # model's main failure is not ending; including it gives that decision explicit
@@ -169,6 +185,15 @@ class DiffusionTask(Task):
             raise ValueError("grammar loss is enabled but paren_delta/ring_count tables are missing")
 
     # ------------------------------------------------------------------
+    def _gate(self, alpha_flat: torch.Tensor, threshold: float) -> torch.Tensor:
+        """Which samples of the batch the token-level terms run on, as a boolean mask."""
+        if self.gate_mode == "threshold":
+            return alpha_flat > threshold
+        count = max(1, int(round(self.gate_fraction * alpha_flat.numel())))
+        mask = torch.zeros_like(alpha_flat, dtype=torch.bool)
+        mask[torch.topk(alpha_flat, count).indices] = True
+        return mask
+
     def _sample_x0_noise(self, reference, token_ids, embed) -> torch.Tensor:
         """Corruption applied to the data latents before diffusion.
 
@@ -327,7 +352,8 @@ class DiffusionTask(Task):
             x0_hat = eps_theta  # (B, L, C)
 
         # ----- Reconstruction MSE (only at low-noise / high-alpha steps) -----
-        mse_t0_sample_mask = (alpha > self.mse_t0_alpha_threshold).squeeze(-1).squeeze(-1)  # (B,)
+        alpha_for_gate = alpha.squeeze(-1).squeeze(-1)  # (B,)
+        mse_t0_sample_mask = self._gate(alpha_for_gate, self.mse_t0_alpha_threshold)  # (B,)
         if self.mask_loss:
             mse_t0_loss_mask = loss_mask * mse_t0_sample_mask[:, None].float()  # (B, L)
         else:
@@ -346,7 +372,7 @@ class DiffusionTask(Task):
         # will actually see and sends the gradient through the denoiser.
         logits = get_logits(x0 if self.ce_input == "x0" else x0_hat)  # (B, L, V)
 
-        ce_sample_mask = (alpha > self.ce_alpha_threshold).squeeze(-1).squeeze(-1)  # (B)
+        ce_sample_mask = self._gate(alpha_for_gate, self.ce_alpha_threshold)  # (B,)
 
         if ce_sample_mask.any():
             ce_loss = F.cross_entropy(

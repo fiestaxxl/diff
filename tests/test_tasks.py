@@ -188,3 +188,48 @@ def test_including_padding_teaches_the_readout_to_emit_it():
         row = model.out_proj.weight.grad[0] if model.out_proj.weight.grad is not None else None
         grads[include] = 0.0 if row is None else float(row.abs().sum())
     assert grads[True] > grads[False]
+
+
+def test_the_threshold_gate_selects_by_alpha():
+    task = _diffusion_task()
+    alpha = torch.tensor([0.1, 0.85, 0.5, 0.95])
+    mask = task._gate(alpha, 0.8)
+    assert mask.tolist() == [False, True, False, True]
+
+
+def test_the_topk_gate_takes_a_fixed_share_whatever_the_alphas_are():
+    task = _diffusion_task(gate_mode="topk", gate_fraction=0.5)
+    for alpha in (torch.tensor([0.1, 0.2, 0.3, 0.4]),
+                  torch.tensor([0.9, 0.95, 0.99, 0.999]),
+                  torch.rand(4)):
+        mask = task._gate(alpha, 0.8)
+        assert int(mask.sum()) == 2, alpha
+
+
+def test_the_topk_gate_picks_the_highest_alphas():
+    task = _diffusion_task(gate_mode="topk", gate_fraction=0.5)
+    mask = task._gate(torch.tensor([0.1, 0.9, 0.2, 0.8]), 0.8)
+    assert mask.tolist() == [False, True, False, True]
+
+
+def test_the_topk_gate_always_selects_at_least_one_sample():
+    task = _diffusion_task(gate_mode="topk", gate_fraction=0.01)
+    assert int(task._gate(torch.rand(4), 0.8).sum()) == 1
+
+
+def test_a_bad_gate_setting_is_reported():
+    for kwargs in ({"gate_mode": "sometimes"}, {"gate_fraction": 0.0},
+                   {"gate_fraction": 1.5}):
+        try:
+            _diffusion_task(**kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{kwargs} should have been rejected")
+
+
+def test_the_loss_runs_under_the_deterministic_gate():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch(batch_size=8)
+    out = _diffusion_task(gate_mode="topk", gate_fraction=0.5).compute_loss(model, batch)
+    assert torch.isfinite(out["loss"]) and torch.isfinite(out["ce_loss"])
