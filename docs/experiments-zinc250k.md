@@ -260,3 +260,33 @@ tokens (12.85%). Its direction matters as much as its use, since centring the sa
 distribution towards the data end gives nothing. The two masking rows confirm from the
 other side that padding carries the termination signal: remove it and generation
 collapses.
+
+## Averaged weights and augmented data
+
+Same size and budget as the screening wave, 100 solver steps, argmax decoding. "final"
+is the weights at the last step, "averaged" is the exponential moving average with decay
+0.999 started at step 2000.
+
+| run | data | weights | validity | mean length |
+|---|---|---|---|---|
+| r_ema | plain corpus | final | 4.40% | 46.1 |
+| r_ema | plain corpus | averaged | 0.24% | 186.0 |
+| r_aug4 | 4x random traversals | final | 2.62% | 47.5 |
+| r_aug4, seed 43 | 4x random traversals | final | 2.65% | 47.4 |
+| r_aug4_ema | 4x random traversals | final | 3.24% | 46.4 |
+| r_aug4_ema | 4x random traversals | averaged | 1.47% | 46.3 |
+
+Both ideas are negative here, and the averaging result is the more interesting one.
+Weight averaging is standard in image diffusion and it is strongly harmful in this
+model: 4.40% falls to 0.24%, and the averaged model stops terminating, producing 186
+characters against the corpus 44. The averaged checkpoint is a legitimate average, not a
+broken file: its largest per-tensor relative difference from the final weights is 2% and
+the median is 0.6%, with no NaNs. A perturbation that small destroying generation says
+the embedding table and the readout are tuned to each other tightly enough that moving
+them along a trajectory average breaks the pairing. That is a property worth reporting in
+its own right, and it is the same fragility that makes clamping the x0 estimate fail.
+
+Augmentation by random SMILES traversals costs about half the validity at a fixed step
+count. Four times as many distinct strings for the same number of updates means each
+string is seen a quarter as often, and at this budget repetition is what the model needs.
+The two seeds agree to within 0.03 points, so this is not noise.
