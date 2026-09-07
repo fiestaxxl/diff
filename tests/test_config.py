@@ -85,3 +85,10 @@ def test_batch_size_indivisible() -> None:
     )
     with pytest.raises(ValueError):
         update_batch_size_info(cfg, world_size=3)
+
+
+def test_the_analysis_node_accepts_arbitrary_keys() -> None:
+    """The analysis scripts put a checkpoint and a few knobs there; struct mode must allow it."""
+    cfg = load_config(CONFIGS[0], ["analyze.checkpoint=runs/x/ep1-ba1", "analyze.points=7"])
+    assert cfg.analyze["checkpoint"] == "runs/x/ep1-ba1"
+    assert int(cfg.analyze["points"]) == 7

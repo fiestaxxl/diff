@@ -132,14 +132,25 @@ class GrammarConstrainedDecoder:
             if idx is not None and idx < self.vocab_size:
                 self.is_stop[idx] = True
 
-    def decode(self, logits: torch.Tensor, chunk: int = 2000) -> List[str]:
-        """logits: (B, L, V) -> list of SMILES strings."""
+    def decode(self, logits: torch.Tensor, chunk: int = 2000,
+               min_length: Optional[torch.Tensor] = None) -> List[str]:
+        """logits: (B, L, V) -> list of SMILES strings.
+
+        ``min_length``, when given, is one integer per sample: a stop token before that
+        position is ignored and the best content token is written instead. Pinning the
+        canvas past a drawn length is only half of length conditioning; without this the
+        model can still end the molecule early, and it does.
+        """
         out: List[str] = []
+        floors = None if min_length is None else min_length.to("cpu").tolist()
         for start in range(0, logits.shape[0], chunk):
-            out.extend(self._decode_chunk(logits[start : start + chunk].float().cpu().numpy()))
+            block = logits[start : start + chunk].float().cpu().numpy()
+            block_floors = None if floors is None else floors[start : start + chunk]
+            out.extend(self._decode_chunk(block, block_floors))
         return out
 
-    def _decode_chunk(self, logits: np.ndarray) -> List[str]:
+    def _decode_chunk(self, logits: np.ndarray,
+                      floors: Optional[List[int]] = None) -> List[str]:
         """Model-driven decoding with grammar repair.
 
         The model decides the content and the length: its argmax is taken as the
@@ -155,8 +166,9 @@ class GrammarConstrainedDecoder:
 
         results: List[str] = []
         for i in range(batch):
+            floor = 0 if floors is None else int(floors[i])
             if self.strict:
-                results.append(self._decode_strict(order[i], length))
+                results.append(self._decode_strict(order[i], length, floor))
                 continue
             depth = 0
             parity = np.zeros(10, dtype=np.int8)
@@ -167,7 +179,11 @@ class GrammarConstrainedDecoder:
             for pos in range(length):
                 intended = int(order[i, pos, 0])
                 if self.is_stop[intended]:
-                    break  # the model wants to end the molecule here
+                    if len(pieces) >= floor:
+                        break  # the model wants to end the molecule here
+                    intended = self._first_content(order[i, pos])
+                    if intended is None:
+                        break
                 if self.is_special[intended]:
                     continue  # <bos> and friends carry no content
                 if self.is_banned[intended]:
@@ -233,7 +249,16 @@ class GrammarConstrainedDecoder:
         return results
 
 
-    def _decode_strict(self, order: np.ndarray, length: int) -> str:
+    def _first_content(self, candidates: np.ndarray) -> Optional[int]:
+        """The model's best choice at this position that is neither special nor banned."""
+        for cand in candidates:
+            cand = int(cand)
+            if self.is_stop[cand] or self.is_special[cand] or self.is_banned[cand]:
+                continue
+            return cand
+        return None
+
+    def _decode_strict(self, order: np.ndarray, length: int, floor: int = 0) -> str:
         """Decode one sample, refusing any token that would make the string unparseable.
 
         Same shape as the loose path: the model's argmax decides content and length, and
@@ -246,7 +271,12 @@ class GrammarConstrainedDecoder:
         for pos in range(length):
             intended = int(order[pos, 0])
             if self.is_stop[intended]:
-                break
+                if len(pieces) >= floor:
+                    break
+                replacement = self._first_content(order[pos])
+                if replacement is None:
+                    break
+                intended = replacement
             if self.is_special[intended]:
                 continue
             candidates = [intended]

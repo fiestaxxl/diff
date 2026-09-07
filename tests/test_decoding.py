@@ -198,3 +198,36 @@ def test_strict_decoding_still_honours_the_atom_vocabulary():
     out = decode(["C", "[P@@]", "O", "<eos>"], second=[None, "N", None],
                  strict=True, allowed_brackets={"[13C]"})
     assert out == "CNO"
+
+
+def test_a_stop_token_before_the_floor_is_ignored():
+    """Length conditioning needs the decoder to refuse an early end."""
+    decoder = GrammarConstrainedDecoder(StubTokenizer(), canvas=6)
+    logits = logits_for(["C", "<eos>", "C", "C", "<eos>", "<pad>"],
+                        second=[None, "N", None, None, None, None], canvas=6)
+    assert decoder.decode(logits)[0] == "C"
+    assert decoder.decode(logits, min_length=torch.tensor([3]))[0] == "CNCC"
+
+
+def test_the_floor_does_not_extend_past_what_the_model_gives():
+    decoder = GrammarConstrainedDecoder(StubTokenizer(), canvas=4)
+    logits = logits_for(["C", "C", "<eos>", "<pad>"], canvas=4)
+    out = decoder.decode(logits, min_length=torch.tensor([99]))[0]
+    assert out.startswith("CC") and len(out) <= 4
+
+
+def test_the_floor_is_per_sample():
+    decoder = GrammarConstrainedDecoder(StubTokenizer(), canvas=5)
+    a = logits_for(["C", "<eos>", "C", "C", "<pad>"], second=[None, "N", None, None, None],
+                   canvas=5)
+    logits = torch.cat([a, a], dim=0)
+    out = decoder.decode(logits, min_length=torch.tensor([0, 3]))
+    assert out[0] == "C" and out[1] == "CNCC"
+
+
+def test_strict_decoding_honours_the_floor_too():
+    decoder = GrammarConstrainedDecoder(StubTokenizer(), canvas=6, strict=True)
+    logits = logits_for(["C", "<eos>", "C", "C", "<eos>", "<pad>"],
+                        second=[None, "N", None, None, None, None], canvas=6)
+    assert decoder.decode(logits)[0] == "C"
+    assert decoder.decode(logits, min_length=torch.tensor([3]))[0] == "CNCC"

@@ -33,6 +33,13 @@ class TransformerConfig:
  
     # ---- regularization ----
     attn_dropout: float = 0.0
+
+    # ---- self-conditioning ----
+    # When true the denoiser takes a second input of the same shape as the latent: its
+    # own previous estimate of x0. Training feeds it on half the steps and zeros on the
+    # rest, sampling feeds the estimate from the previous solver step. The extra half of
+    # up_proj is initialised to zero, so a fresh model behaves exactly as before.
+    self_conditioning: bool = False
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -69,7 +76,9 @@ class DiffusionTransformer(nn.Module):
         self.config = config
 
         self.token_embedding = nn.Embedding(config.vocab_size, config.emb_dim, padding_idx=config.pad_idx)
-        self.up_proj = nn.Linear(config.emb_dim, config.model_dim)
+        self.self_conditioning = bool(getattr(config, "self_conditioning", False))
+        in_dim = config.emb_dim * (2 if self.self_conditioning else 1)
+        self.up_proj = nn.Linear(in_dim, config.model_dim)
 
         self.time_embeddings = TimeEmbeddings(config)
 
@@ -88,7 +97,11 @@ class DiffusionTransformer(nn.Module):
         # self.out_proj.weight = self.token_embedding.weight
 
         self.apply(self._init_params)
-        self._init_special_layers() 
+        self._init_special_layers()
+        if self.self_conditioning:
+            # the second input starts with no influence at all
+            with torch.no_grad():
+                self.up_proj.weight[:, config.emb_dim:].zero_()
 
     def _init_params(self, module):
         if isinstance(module, nn.Linear):
@@ -125,7 +138,17 @@ class DiffusionTransformer(nn.Module):
         input_embeddings: torch.Tensor,        # (B, T, C)
         time: torch.Tensor,             # (B,) or (B, 1) in [0, 1]
         attention_mask: Optional[torch.Tensor] = None,
+        x0_self: Optional[torch.Tensor] = None,  # previous x0 estimate, (B, T, C)
     ):
+        if self.self_conditioning:
+            if x0_self is None:
+                x0_self = torch.zeros_like(input_embeddings)
+            input_embeddings = torch.cat((input_embeddings, x0_self.detach()), dim=-1)
+        elif x0_self is not None:
+            raise ValueError(
+                "x0_self was passed but model.self_conditioning is off; "
+                "the model has no input for it"
+            )
 
         input_embeddings = self.up_proj(input_embeddings)
 

@@ -8,16 +8,32 @@ import torch.nn as nn
 
 
 class DenoiserModel(nn.Module):
+    """eps/x prediction turned into a score, plus the self-conditioning carry.
+
+    A self-conditioned model wants its own previous estimate of x0 as a second input. The
+    solver calls this wrapper once per step in order, so the estimate is simply kept here
+    between calls, starting from zeros. ``reset()`` clears it, which matters when the same
+    wrapper is reused for another batch.
+    """
+
     def __init__(self, eps_model, path, regime='epsilon'):
         super().__init__()
         self.eps_model = eps_model
         self.path = path
         self.regime = regime
+        self._x0_self = None
+
+    def reset(self):
+        self._x0_self = None
 
     def forward(self, x, t, **kwargs):
+        from dimol.training.distributed import unwrap_model
+
         alpha_t = torch.clamp(self.path.alpha(t), min=1e-3)
         beta_t  = torch.clamp(self.path.beta(t),  min=1e-3)
         t_in    = t.squeeze(-1)
+        if getattr(unwrap_model(self.eps_model), "self_conditioning", False):
+            kwargs["x0_self"] = self._x0_self
         pred    = self.eps_model(x, t_in, **kwargs)
 
         if self.regime == 'epsilon':
@@ -27,6 +43,7 @@ class DenoiserModel(nn.Module):
         else:
             raise ValueError(f"Expected regime to be 'epsilon' or 'x', got {self.regime}")
 
+        self._x0_self = x0_pred.detach()
         score = (alpha_t * x0_pred - x) / (beta_t ** 2)
         return score
 

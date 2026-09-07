@@ -29,17 +29,18 @@ class Simulator(ABC):
             - x_final: final state at time ts[-1], shape (bs, c, h, w) (num_samples, seq_len, emb_dim)
         """
         nts = ts.shape[1]
+        # An optional hook run after every step, given (x, t_next). It exists for
+        # conditional sampling: the caller can overwrite the part of the state it knows,
+        # which is how length conditioning and any other inpainting is done.
+        on_step = kwargs.pop("on_step", None)
 
-        if use_bar:
-            for t_idx in tqdm(range(nts - 1)):
-                t = ts[:, t_idx]
-                h = ts[:, t_idx + 1] - ts[:, t_idx]
-                x = self.step(x, t, h, **kwargs)
-        else:
-            for t_idx in range(nts - 1):
-                t = ts[:, t_idx]
-                h = ts[:, t_idx + 1] - ts[:, t_idx]
-                x = self.step(x, t, h, **kwargs)
+        steps = range(nts - 1)
+        for t_idx in tqdm(steps) if use_bar else steps:
+            t = ts[:, t_idx]
+            h = ts[:, t_idx + 1] - ts[:, t_idx]
+            x = self.step(x, t, h, **kwargs)
+            if on_step is not None:
+                x = on_step(x, ts[:, t_idx + 1])
         return x
 
     @torch.no_grad()

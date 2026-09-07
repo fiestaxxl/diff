@@ -83,6 +83,7 @@ class DiffusionTask(Task):
         ce_input: str = "x0",
         mask_padding: str = "none",
         pad_weight: float = 1.0,
+        self_cond_prob: float = 0.5,
         ce_include_pad: bool = False,
         min_snr_gamma: Optional[float] = None,
         decoder_pretrain_steps: int = 0,
@@ -138,6 +139,11 @@ class DiffusionTask(Task):
         if not 0.0 <= float(pad_weight) <= 1.0:
             raise ValueError(f"loss.pad_weight={pad_weight!r} must be in [0, 1]")
         self.pad_weight = float(pad_weight)
+        # Self-conditioning, when the model has the input for it: on this share of steps
+        # the model first estimates x0 with the second input zeroed, then denoises again
+        # with that estimate fed back. The first pass costs one extra forward and no
+        # backward, and the gradient never flows through it.
+        self.self_cond_prob = float(self_cond_prob)
         # The original cross-entropy ignores padding, so the readout is never told to
         # emit it. On a fixed canvas padding is the only way a molecule can end, and the
         # model's main failure is not ending; including it gives that decision explicit
@@ -256,8 +262,24 @@ class DiffusionTask(Task):
         # (B, 1, 1, L) boolean mask; True marks positions that take part in attention
         attn_mask = pad_mask[:, None, None, :].bool() if self.mask_attention else None
         forward_ctx = nullcontext if self.autocast_scope == "loss" else self.autocast
+        x0_self = None
+        raw_model = unwrap_model(model)
+        if getattr(raw_model, "self_conditioning", False) and self.self_cond_prob > 0:
+            use = torch.rand((), device=x.device) < self.self_cond_prob
+            if bool(use):
+                with torch.no_grad(), forward_ctx():
+                    first = model(input_embeddings=x, time=time, attention_mask=attn_mask)
+                alpha_first = alpha.clamp(min=self.alpha_eps)
+                if self.regime == "epsilon":
+                    x0_self = ((x - beta * first) / alpha_first).detach()
+                else:
+                    x0_self = first.detach()
+
+        forward_kwargs = {"input_embeddings": x, "time": time, "attention_mask": attn_mask}
+        if getattr(raw_model, "self_conditioning", False):
+            forward_kwargs["x0_self"] = x0_self  # None means "zeros", handled by the model
         with forward_ctx():
-            eps_theta = model(input_embeddings=x, time=time, attention_mask=attn_mask)
+            eps_theta = model(**forward_kwargs)
 
         # Per-sample weight from the signal-to-noise ratio of the drawn timestep. The
         # plain mean treats every t alike, which lets the easy high-alpha steps, where

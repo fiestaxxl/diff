@@ -53,6 +53,12 @@ model:
                                # 256/4 gives 5.0M parameters: the workhorse for testing
                                # hypotheses fast. Scale it up with the same tokens per
                                # parameter budget (see docs/scaling-zinc250k.md)
+  self_conditioning: false     # true gives the denoiser a second input of the same shape
+                               # as the latent: its own previous estimate of x0. Training
+                               # produces that estimate on loss.self_cond_prob of the
+                               # steps with one extra forward and no backward, sampling
+                               # carries it from the previous solver step. The extra half
+                               # of up_proj starts at zero, so a fresh model is unchanged
   vocab_size: ${variables.vocab_size}   # must be >= the tokenizer vocab (checked)
   pad_idx: ${variables.pad_idx}         # row kept at zero in the embedding table
   max_pos: 64                  # RoPE table size; must be >= seq_len, cheap to over-size
@@ -106,6 +112,10 @@ loss:
                                # turn this on here: the cross-entropy and reconstruction
                                # terms are gated to high-SNR steps, so capping them
                                # removes the token-level supervision (0.47% vs 5.28%)
+  self_cond_prob: 0.5          # share of steps that get the self-conditioning pass, and
+                               # it must stay below 1: the model has to work with a zeroed
+                               # second input too, because the first solver step has no
+                               # previous estimate. Ignored unless the model declares it
   ce_include_pad: false        # false = original behaviour, the cross-entropy ignores
                                # padding, so the readout is never told to emit it. true
                                # supervises termination explicitly at the cost of a very

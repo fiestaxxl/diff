@@ -28,6 +28,11 @@ generate:
                                  # the cheap default for screening
   variance: 1.0                  # noise in the reverse SDE. 1.0 is best measured; 0.0 is
                                  # the deterministic probability flow and 1.4 points worse
+  length_prior: null             # null lets the model decide where to stop, which is the
+                                 # original behaviour and has a degenerate optimum at short
+                                 # sequences. A path to the tokenized split (or one
+                                 # *attn_mask*.npy shard) draws the length from the corpus
+                                 # instead and pins the rest of the canvas to padding
   strict_decode: false           # true replaces the bracket and ring-digit counting with
                                  # the full connectivity check: no ring closed onto its
                                  # own atom, no closure duplicating an existing bond, no

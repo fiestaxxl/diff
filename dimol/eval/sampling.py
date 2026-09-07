@@ -1,6 +1,19 @@
 """Generate SMILES from noise: SDE integration plus logit decoding.
 
-The sampling scheme is carried over unchanged from the old code
+Length conditioning is the one addition to the original scheme, and it is here rather
+than in the model because it needs no training. On a padded canvas the objective has a
+degenerate optimum: two thirds of the training positions are padding, so a model can
+lower its loss by ending sequences early, and the measurements say it does. Runs that
+collapse to short strings score high on validity and badly on every distribution metric,
+and that trade-off is most of the variance between runs.
+
+Drawing the length from the corpus instead takes the decision away from the model. The
+positions past the drawn length are known to be padding, so at every solver step they are
+overwritten with their exact conditional value, alpha(t) * pad_embedding + beta(t) * noise,
+which is the standard replacement method for conditional diffusion. The model then only
+has to fill the canvas it is given.
+
+The rest of the scheme is carried over unchanged from the old code
 (``generate.py::generate`` and the sampling block in
 ``ConditionalGaussianDenoiserTrainerLite.evaluate``): p_simple -> Euler-Maruyama
 over the ts grid -> out_proj -> argmax -> decode_batch(special_decode=True).
@@ -35,8 +48,19 @@ class SamplingParams:
     allowed_brackets: Optional[frozenset] = None  # bracket atoms the corpus contains
     on_disallowed: str = "next_best"  # what to do with an atom outside that set
     strict: bool = False          # full connectivity check instead of bracket counting
+    length_prior: Optional[Any] = None  # 1-d array of token lengths to draw from
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
+
+
+def _draw_lengths(prior, count: int, canvas: int, generator) -> torch.Tensor:
+    """Sample `count` sequence lengths from an empirical length distribution."""
+    lengths = torch.as_tensor(prior, dtype=torch.long).flatten()
+    if lengths.numel() == 0:
+        raise ValueError("the length prior is empty")
+    lengths = lengths.clamp(1, canvas)
+    idx = torch.randint(0, lengths.numel(), (count,), generator=generator)
+    return lengths[idx]
 
 
 def _time_grid(params: SamplingParams) -> torch.Tensor:
@@ -99,6 +123,12 @@ def sample_smiles(
     sde = LearnedScoreSDE(path, score_model, params.variance)
     simulator = EulerMaruyamaSimulator(sde)
 
+    canvas = path.p_simple.shape[0]
+    pad_embedding = None
+    if params.length_prior is not None:
+        pad_idx = getattr(raw.config, "pad_idx", 0)
+        pad_embedding = raw.token_embedding.weight[pad_idx].detach()
+
     batch_size = params.batch_size or params.num_samples
     smiles: List[str] = []
     done = 0
@@ -111,13 +141,36 @@ def sample_smiles(
             .expand(b, -1, -1, -1)
             .to(device)
         )
-        xts = simulator.simulate(x0, ts, use_bar=params.progress)
+        on_step = None
+        drawn_lengths = None
+        if pad_embedding is not None:
+            generator = torch.Generator(device="cpu").manual_seed(params.seed + done)
+            lengths = _draw_lengths(params.length_prior, b, canvas, generator)
+            drawn_lengths = lengths
+            positions = torch.arange(canvas).view(1, canvas)
+            known = (positions >= lengths.view(b, 1)).to(device)  # True where padding
+            known_mask = known.unsqueeze(-1)
+            pad_target = pad_embedding.view(1, 1, -1)
+
+            def on_step(state, t_next, _mask=known_mask, _pad=pad_target):
+                alpha, beta = path.alpha(t_next), path.beta(t_next)
+                noise = torch.randn_like(state)
+                conditional = alpha * _pad + beta * noise
+                return torch.where(_mask, conditional, state)
+
+            x0 = on_step(x0, ts[:, 0])
+
+        if hasattr(score_model, "reset"):
+            score_model.reset()  # self-conditioning must not carry across batches
+        xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
         logits = get_logits(xts)
         if decoder is None:
             ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
             smiles.extend(tokenizer.decode_batch(ids, special_decode=True))
         else:
-            smiles.extend(decoder.decode(logits.detach()))
+            # the drawn length is a floor as well as a ceiling: without it the model
+            # simply ends the molecule early and the conditioning does nothing
+            smiles.extend(decoder.decode(logits.detach(), min_length=drawn_lengths))
         done += b
     return smiles
 

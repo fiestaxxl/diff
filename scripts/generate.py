@@ -26,6 +26,29 @@ from dimol.models.diffusion_transformer import DiffusionTransformer  # noqa: E40
 from dimol.training.distributed import seed_all  # noqa: E402
 
 
+def _length_prior(gen: dict):
+    """Token lengths of the training split, to draw generation lengths from.
+
+    Read from the attention masks of the tokenized corpus, which is where the true token
+    length of every molecule already is: summing a row gives its length.
+    """
+    source = gen.get("length_prior")
+    if not source or source in ("none", False):
+        return None
+    import numpy as np
+
+    path = Path(source)
+    files = sorted(path.glob("*attn_mask*.npy")) if path.is_dir() else [path]
+    if not files:
+        raise FileNotFoundError(f"no attention-mask shards under {path}")
+    lengths = np.concatenate([
+        np.load(file, mmap_mode="r").sum(axis=1).astype(np.int64) for file in files
+    ])
+    print(f"length prior: {len(lengths)} molecules, "
+          f"mean {lengths.mean():.1f}, median {int(np.median(lengths))}, max {lengths.max()}")
+    return lengths
+
+
 def _allowed_brackets(gen: dict):
     """The bracket atoms the training corpus uses, when the config asks for the restriction.
 
@@ -79,6 +102,7 @@ def main(cfg: DictConfig) -> None:
         allowed_brackets=_allowed_brackets(gen),
         on_disallowed=str(gen.get("on_disallowed", "next_best")),
         strict=bool(gen.get("strict_decode", False)),
+        length_prior=_length_prior(gen),
         time_grid=str(gen.get("time_grid", "uniform")),
         time_grid_power=float(gen.get("time_grid_power", 2.0)),
     )

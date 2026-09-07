@@ -166,6 +166,9 @@ class DimolConfig:
     model: Dict[str, Any] = field(default_factory=dict)
     diffusion: Dict[str, Any] = field(default_factory=dict)
     loss: Dict[str, Any] = field(default_factory=dict)
+    # free-form nodes for the analysis scripts: they take a training config and only
+    # need somewhere to put a checkpoint path and a few knobs
+    analyze: Dict[str, Any] = field(default_factory=dict)
     train_loader: Dict[str, Any] = field(default_factory=dict)
     eval_loader: Optional[Dict[str, Any]] = None
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
