@@ -387,3 +387,37 @@ The same table carries a second result. This checkpoint reads 15.29% at 100 solv
 and 13.55% at 300, with non-overlapping intervals, while the uniform-timestep model was
 flat from 100 to 1000 steps. So the best step count depends on how the model was trained,
 and for the winner it is the cheap end: fewer steps, better molecules.
+
+## The two changes together
+
+The same twelve checkpoints, decoded twice: once with the original argmax readout and
+once with mixed grammar repair, 100 solver steps both times. Unique valid is the count of
+distinct molecules per 10,000 attempts, which is the number a generative model is
+actually judged on.
+
+| run | argmax | repaired | unique valid | mean length |
+|---|---|---|---|---|
+| r_tl0_sphere | 12.25% | **63.08%** | 5615 | 29.8 |
+| r_tl0_ce3 | 16.62% | 60.29% | 5442 | 34.9 |
+| r_tl0_lr6e3 | 14.70% | 59.77% | 5304 | 32.7 |
+| r_tlp05 | 10.95% | 52.04% | 4757 | 27.9 |
+| r_tl0_emb16 | 13.73% | 50.74% | 4611 | 30.8 |
+| r_tlm05 | 7.85% | 50.57% | 4414 | 35.3 |
+| r_tlm05_emb16 | 9.19% | 47.84% | 4127 | 34.3 |
+| r_tl0_s43 | 13.71% | 47.22% | 3846 | 28.8 |
+| r_tls15 | 5.85% | 44.50% | 3451 | 32.1 |
+| r_base80 | 6.19% | 42.23% | 3175 | 31.8 |
+| r_tls07 | 12.50% | 37.13% | 2871 | 29.4 |
+| r_tl0_bud160 | 7.23% | 35.45% | 2851 | 35.3 |
+
+Start from the original setup, uniform timesteps and argmax decoding, and the small model
+returns about 620 distinct valid molecules per 10,000 attempts. The best row here returns
+5615, a factor of nine, from two changes that cost nothing: where the training timesteps
+come from, and repairing brackets and ring digits while decoding.
+
+Two honest caveats sit next to that number. The repaired molecules average 30 characters
+against the corpus 44, so the repair buys yield partly by producing smaller molecules,
+and the length-preserving mode has to be quoted alongside. And the ranking is not the
+same under the two decoders: the sphere-corruption run is sixth on argmax and first once
+repaired, which means a screening study that ranks on argmax alone can pick the wrong
+winner. Both decoders should be reported for every configuration that matters.
