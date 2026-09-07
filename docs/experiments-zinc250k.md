@@ -725,3 +725,56 @@ counts match the corpus, aromatic rings are 0.82 against 1.89, a shift of 1.09 s
 deviations with a KS statistic of 0.46, and the synthetic accessibility score is 1.9
 standard deviations worse. The model builds rings of the right number and the wrong kind.
 That, not validity, is the next target.
+
+## Aromaticity is a depth problem, and it is the only thing that behaves like one
+
+The gap left after length and self-conditioning was specific: the model produced the right
+number of rings and the wrong kind, 0.8 aromatic rings against the corpus 1.85. Across the
+eight training configurations measured before this, that number does not move at all.
+
+| configuration | usable | aromatic rings |
+|---|---|---|
+| length conditioning | 9.16% | 0.79 |
+| length + self-conditioning | 13.20% | 0.77 |
+| reference | 13.20% | 0.75 |
+| tied readout | 12.42% | 0.73 |
+| self-conditioning | 17.38% | 0.72 |
+| self-conditioning + logit-normal | 30.02% | 0.69 |
+| tied readout + logit-normal | 20.49% | 0.60 |
+| corpus | - | **1.85** |
+
+Usable molecules range over a factor of three in that table and aromatic rings sit between
+0.60 and 0.79 throughout, with the highest-yield configuration the worst of them. No
+objective, no timestep density, no gating and no decoding rule touches it.
+
+Depth does. Five shapes, all on the same stack (self-conditioning, trained-in length
+conditioning, uniform timesteps), three seeds each, head size held at 64:
+
+| shape | parameters | blocks | usable, mean | range | aromatic rings | FCD | SA |
+|---|---|---|---|---|---|---|---|
+| 384 x 2 | 5.17M | 2 | 10.22% | 7.60-14.33 | 0.75 | 12.68 | 4.81 |
+| 256 x 4 | 5.06M | 4 | 14.78% | 12.93-15.73 | 0.85 | 11.09 | 4.29 |
+| 256 x 4, latent 64 | 5.12M | 4 | 16.29% | 13.53-18.13 | 0.86 | - | 4.31 |
+| 192 x 8 | 6.19M | 8 | **19.93%** | 17.33-23.27 | **1.05** | **9.05** | 4.09 |
+| 384 x 6 | 14.62M | 6 | **24.02%** | 21.20-29.27 | **1.10** | 9.03 | 3.99 |
+| corpus | - | - | - | - | 1.85 | 0 | 3.07 |
+
+The first three rows are matched within 2% on parameters, so 2 against 4 blocks is a clean
+depth comparison at fixed size: 10.22% against 14.78% usable, 0.75 against 0.85 aromatic
+rings. Eight blocks carries 22% more parameters, because the adaLN modulation scales with
+depth, and the capacity probe carries 2.9x, so those two rows mix depth with size. Even so
+the ordering is monotone in both, and it is monotone in exactly the quantity that no
+training change could move: 0.75, 0.85, 0.86, 1.05, 1.10. Synthetic accessibility follows
+it down, 4.81 to 3.99 against the corpus 3.07, and FCD follows it down too, 12.68 to 9.03,
+the best in this study.
+
+Widening the latent from 32 to 64 does almost nothing, 0.85 to 0.86, which says the
+bottleneck is not how much room a token's representation has. It is how many rounds of
+mixing the positions get before they are decoded, which is what an aromatic ring needs:
+five or six atoms and a matched ring digit that all have to agree, decoded from a latent
+by a readout that sees each position on its own.
+
+That is the argument for scale, and it is a specific one rather than a hope. Every
+objective-side change in this study either moves yield at the cost of fidelity or improves
+both by a modest amount; the one structural property the corpus has and the samples lack
+responds only to depth and capacity.
