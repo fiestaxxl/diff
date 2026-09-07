@@ -572,3 +572,31 @@ So the configuration to carry forward is not the timestep change alone but the t
 change with the readout weighted up, and the reason to prefer it is stability as much as
 the mean. On argmax the same group reads 16.48% over three seeds, range 13.99-18.82,
 against 5.55-6.19% for the reference.
+
+## The final aggregate, three seeds where it matters
+
+Every run regenerated or generated at 100 solver steps with argmax, grouped by
+configuration with `scripts/compare_configs.py`, reference is the uniform-timestep run.
+
+| configuration | seeds | mean | range | verdict |
+|---|---|---|---|---|
+| logit-normal + padding weight 0.6 | 2 | 16.81% | 7.46-26.15 | clears the reference |
+| logit-normal + learning rate 1.5e-4 | 3 | 13.90% | 8.61-17.99 | clears the reference |
+| logit-normal + cross-entropy weight 3 | 4 | 13.22% | 9.50-18.82 | clears the reference |
+| logit-normal alone | 4 | 13.69% | 7.18-18.08 | clears the reference |
+| logit-normal + warmup 1600 steps | 3 | 8.44% | 4.27-12.11 | inside the spread |
+| reference, uniform timesteps | 2 | 5.67% | 5.55-5.78 | - |
+
+This is the table the study actually supports, and it is shorter than every intermediate
+version of it. One training-side change clears the reference: the logit-normal timestep
+distribution, on every one of its four seeds, mean 13.7% against 5.67%, a factor of 2.4.
+Nothing added on top of it separates from it. The cross-entropy weight looked like a
+stabiliser on two seeds, 60.29% and 60.38% repaired, and on four seeds its argmax range is
+9.50-18.82%, as wide as the plain configuration's. Padding weight, sphere corruption, the
+raised gate and label smoothing are all single or double draws from that same wide
+distribution.
+
+Two attempts to reduce the variance failed. A four-times longer warmup lowers the mean to
+8.44% and keeps the spread. A halved peak learning rate leaves both the mean and the
+spread where they were. So the instability is not obviously an optimisation artefact, and
+finding its source is the open question this study ends on.
