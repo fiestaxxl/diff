@@ -1,0 +1,68 @@
+# ZINC-20: corpus preparation and tokenization at a scale ZINC-250k could not reach.
+#
+#   bash scratch/cap16.sh python scripts/prepare_data.py     configs/zinc20.yaml
+#   bash scratch/cap16.sh python scripts/tokenize_dataset.py configs/zinc20.yaml
+#
+# Why this corpus exists: ZINC-250k is 5.06M tokens per epoch, so 14.6M parameters at 80
+# tokens per parameter is 231 passes over it, and 161 passes measurably hurt. The 24
+# downloaded shards hold 217.7M molecules, about 4.9B tokens, which covers a 60M-parameter
+# model in a single pass. The full 111 shards are a billion molecules, 22.6B tokens, which
+# covers 180M parameters at 80 tokens per parameter with room to spare.
+
+run_name: zinc20
+
+variables:
+  root: data/zinc20
+  raw: /workspace-SR008.nfs2/iseguryev/diffusion/raw/zinc20/data
+
+tokenizer:
+  # the ZINC-250k tokenizer, reused deliberately: the chemistry is the same library and a
+  # shared vocabulary keeps every earlier number comparable. scripts/train_tokenizers.py
+  # on this corpus is a separate question, to be asked only if the audit shows a gap
+  path: data/zinc250k/tokenizers/bpe_384_alpha.json
+
+prepare:
+  # ---- raw source: local parquet, streamed in batches ----
+  source:
+    files:
+      train: ${variables.raw}    # a directory: every *.parquet in it, in name order
+    column: SMILES
+    splits:
+      train: train
+
+  # ---- curation ----
+  canonicalize: true           # ZINC-20 ships SMILES from another toolkit; evaluation
+                               # canonicalizes with rdkit, so the corpus must too
+  deduplicate: true            # 64-bit hashes, 8 bytes a molecule: 1.7 GB for 218M
+  max_smiles_len: 120
+  allowed_elements: null
+  test_from_val: 0.0           # not used here: there is no upstream val split
+  carve:                       # this corpus ships one split, so val and test come out of
+    from: train                # it, by a stable hash of the molecule
+    val: 0.001                 # 218k molecules, enough for a stable validation loss
+    test: 0.001
+  seed: 42
+  nprocs: 16                   # the node is shared: 16 cores is the ceiling, and the
+                               # Curator default of cpu_count//2 would take 88
+
+  out_dir: ${variables.root}/corpus
+  shard_size: 1000000          # 10x the ZINC-250k shard: 218 text shards, not 2180
+
+  corpus:
+    files:
+      train: ${prepare.out_dir}/train
+      val: ${prepare.out_dir}/val
+      test: ${prepare.out_dir}/test
+    splits:
+      train: train
+      val: val
+      test: test
+
+  # ---- tokenization into memmap arrays ----
+  tokenized_dir: ${variables.root}/tokenized
+  max_length: 64               # same canvas as ZINC-250k, so model shapes carry over
+  array_shard_size: 2000000    # 109 array shards for 218M molecules
+
+  audit_split: val
+  audit_molecules: 200000
+  tokenizer_candidates: []     # nothing to train here; the audit uses the existing one

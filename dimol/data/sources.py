@@ -71,7 +71,8 @@ def _iter_hf(repo: str, split: str, column: str, config_name: Optional[str] = No
 def _iter_path(path: Path, column: str) -> Iterator[str]:
     """A single file, or a directory of shards written by TextShardWriter."""
     if path.is_dir():
-        shards = sorted(path.glob("shard_*.txt")) or sorted(path.glob("*.txt"))
+        shards = (sorted(path.glob("shard_*.txt")) or sorted(path.glob("*.txt"))
+                  or sorted(path.rglob("*.parquet")))
         if not shards:
             raise FileNotFoundError(f"no shards in {path}")
         for shard in shards:
@@ -95,10 +96,13 @@ def _iter_file(path: Path, column: str) -> Iterator[str]:
             for row in csv.DictReader(f):
                 yield row.get(column)
     elif suffix == ".parquet":
+        # streamed in batches: a ZINC-20 shard is nine million rows, and read_table
+        # would pull the whole column into memory before the first molecule comes out
         import pyarrow.parquet as pq
 
-        table = pq.read_table(path, columns=[column])
-        for value in table.column(column).to_pylist():
-            yield value
+        handle = pq.ParquetFile(path)
+        for batch in handle.iter_batches(batch_size=65536, columns=[column]):
+            for value in batch.column(0).to_pylist():
+                yield value
     else:
         raise ValueError(f"do not know how to read {path} (supported: .txt/.smi/.csv/.parquet)")
