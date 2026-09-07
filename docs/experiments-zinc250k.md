@@ -361,3 +361,29 @@ timesteps the same doubling raised it from 5.28% to 9.69%. Both runs are 161 epo
 a 224k-molecule corpus, so this is the point where repetition starts to hurt, and the
 mid-noise-heavy schedule reaches it sooner. The gain is a short-budget effect, and any
 claim about it has to name the budget it was measured at.
+
+## Where the solver puts its steps
+
+One checkpoint, the logit-normal winner, 100 solver steps in every row, argmax decoding.
+The grids keep both endpoints and the step count and only redistribute the stops. The
+power column is how hard the skew is.
+
+| grid | power | validity |
+|---|---|---|
+| uniform, the original | - | **15.29%** |
+| dense at both ends | 2 | 15.09% |
+| dense in the middle | 2 | 12.48% |
+| dense towards data | 2 | 12.39% |
+| dense towards noise | 2 | 10.38% |
+| dense towards data | 3 | 8.32% |
+| dense in the middle | 3 | 8.23% |
+
+A clean negative: the uniform grid is already the best one, the mildest alternative ties
+it within the interval, and everything else costs two to seven points. The knob stays in
+the config because it is one line and it settles the question, but the default does not
+change.
+
+The same table carries a second result. This checkpoint reads 15.29% at 100 solver steps
+and 13.55% at 300, with non-overlapping intervals, while the uniform-timestep model was
+flat from 100 to 1000 steps. So the best step count depends on how the model was trained,
+and for the winner it is the cheap end: fewer steps, better molecules.
