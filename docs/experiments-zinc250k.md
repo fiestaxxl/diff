@@ -649,3 +649,24 @@ Absolute FCD is 14 to 23 across the board, where a good model on this kind of co
 under 1. At 5M parameters and 80 tokens per parameter that is expected, and it is the
 number to watch when the model is scaled, because it is the one that says whether the
 distribution is being learned at all.
+
+## A protocol error worth recording
+
+Waves 18 and 19, twenty-one runs covering self-conditioning, a tied readout and trained-in
+length conditioning, were generated with `generate.length_prior` set, and the sampler at
+that moment also switched on a decode floor: a stop token before the drawn length was
+refused and replaced by the best content token. Wave 17 had already measured that floor at
+0% usable with 60-atom strings, and it was still on, because the floor had no flag of its
+own and rode along with the prior.
+
+The signature is unmistakable in the output, a tail of one repeated rare token:
+
+    [P@]CC[S@](=O)c1cc(=O)c(C#N)n(-n2c(=O)c2)c1C(=)cc1[o+][NH-][NH-][NH-][NH-]...
+
+So none of those twenty-one numbers say anything about the three ideas they were meant to
+test, and all of them were regenerated. The floor is now `generate.length_floor`, default
+false, with the measurement that condemns it written next to it in the config.
+
+The general lesson is about coupling, not about length: a knob that silently turns on a
+second behaviour will eventually be used after that second behaviour has been ruled out.
+Anything measured as harmful gets its own flag and its own default.
