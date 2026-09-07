@@ -101,11 +101,20 @@ Same configuration (grammar off), only the number of steps changes.
 | 20 t/p | 4,400 | 1.43% (mean of two seeds) | | 68 / 26 |
 | 40 t/p | 8,800 | 2.65% | 2.35-2.98 | 63 / 30 |
 | 80 t/p | 17,600 | 5.28% | 4.86-5.73 | 51 / 41 |
+| 160 t/p | 35,200 | 9.69% | 9.13-10.29 | 42 / 48 |
+| 320 t/p | 70,400 | 12.85% | 12.21-13.52 | 34 / 54 |
 
-Validity roughly doubles with every doubling of the budget and shows no sign of
-flattening, while the validation loss stopped moving at 10-20 t/p. The share of failures
-caused by unbalanced parentheses falls from 68% to 51% as the budget grows: the model
-learns branches first and ring closures later.
+Validity roughly doubles with every doubling of the budget up to 160 tokens per
+parameter, and then the curve bends: the last doubling buys only a third more. So 160 is
+the knee for this model, and the validation loss, which stopped moving at 10-20, was
+never a useful signal for it.
+
+The share of failures caused by unbalanced parentheses falls from 68% to 34% as the
+budget grows while ring-closure errors rise from 26% to 54%: the model learns branches
+first and ring bookkeeping much later. Whatever is worked on next should target rings.
+
+Note also that 5.0M at 320 t/p (70,400 steps, 12.85%) loses to 44.9M at 20 t/p
+(39,000 steps, 21.74%): at equal or lower wall clock, parameters beat passes.
 
 ## Everything on one table
 
