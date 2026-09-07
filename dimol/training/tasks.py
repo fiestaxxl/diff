@@ -75,6 +75,7 @@ class DiffusionTask(Task):
         mse_t0_alpha_threshold: float = 0.80,
         grammar_alpha_threshold: float = 0.5,
         label_smoothing: float = 0.0,
+        ce_input: str = "x0",
         mask_padding: bool = False,
         decoder_pretrain_steps: int = 0,
         grammar_enabled: bool = True,
@@ -102,6 +103,9 @@ class DiffusionTask(Task):
         self.mse_t0_alpha_threshold = mse_t0_alpha_threshold
         self.grammar_alpha_threshold = grammar_alpha_threshold
         self.label_smoothing = label_smoothing
+        if ce_input not in ("x0", "x0_hat"):
+            raise ValueError(f"loss.ce_input={ce_input!r}; expected 'x0' or 'x0_hat'")
+        self.ce_input = ce_input
         self.mask_padding = mask_padding
         self.decoder_pretrain_steps = decoder_pretrain_steps
         self.grammar_enabled = grammar_enabled and lambda_grammar != 0.0
@@ -208,7 +212,11 @@ class DiffusionTask(Task):
             mse_loss_t0 = torch.tensor(0.0, device=x.device)
 
         # ----- Cross-entropy (gate by alpha) -----
-        logits = get_logits(x0)  # (B, L, V)
+        # ce_input="x0" is the original behaviour: the readout is trained on the data
+        # latents, so it only has to invert the embedding table it owns, and at sampling
+        # time it is fed the SDE output instead. ce_input="x0_hat" trains it on what it
+        # will actually see and sends the gradient through the denoiser.
+        logits = get_logits(x0 if self.ce_input == "x0" else x0_hat)  # (B, L, V)
 
         ce_sample_mask = (alpha > self.ce_alpha_threshold).squeeze(-1).squeeze(-1)  # (B)
 

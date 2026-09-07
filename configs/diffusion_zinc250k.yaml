@@ -97,6 +97,11 @@ loss:
   label_smoothing: 0.0         # label smoothing inside the cross-entropy
   grammar_enabled: true        # build the grammar tables at all; with lambda_grammar=0
                                # the term and its softmax are skipped entirely
+  ce_input: x0                 # x0 = original behaviour, the readout is trained on the
+                               # data latents and never on the denoiser output, which is
+                               # what it gets at sampling time. x0_hat trains it on the
+                               # reconstruction instead and back-propagates through the
+                               # denoiser
   mask_padding: false          # false = original behaviour: padding takes part in
                                # attention and in the MSE terms. true = pads are excluded
                                # from attention and from both MSE terms, which makes the

@@ -1,0 +1,52 @@
+# Experiment log: ZINC-250k
+
+Everything below runs on the workhorse model (256 wide, 4 blocks, 5.04M parameters),
+one H100 per run, batch 1024 molecules, bf16 + tf32 + torch.compile, comet off. The
+corpus and the tokenizer are described in docs/tokenizer-zinc250k.md.
+
+Evaluation protocol: 10,000 molecules sampled with the Euler-Maruyama sampler over 300
+steps from a fixed seed, scored with RDKit. Validity carries a Wilson 95% interval;
+uniqueness is computed among the valid ones, novelty against the 224,568 training
+molecules.
+
+## Budget: how many tokens per parameter
+
+Constant learning rate after warmup, so the curve is not confounded by a cosine decay.
+Validation loss against the consumed budget:
+
+| run | parameters | 2 t/p | 5 | 10 | 20 | 40 | best | within 1% at |
+|---|---|---|---|---|---|---|---|---|
+| 5.0M seed 42 | 5,038,272 | 3.494 | 0.877 | 0.830 | 0.798 | 0.799 | 0.750 | 34 t/p |
+| 5.0M seed 43 | 5,038,272 | 3.543 | 0.862 | 0.824 | 0.811 | 0.801 | 0.758 | 24 t/p |
+| 16.6M | 16,594,496 | 0.861 | 0.770 | 0.800 | 0.783 | 0.783 | 0.748 | 10 t/p |
+| 44.9M | 44,939,968 | 0.788 | 0.800 | 0.800 | 0.800 | 0.800 | 0.761 | 1.4 t/p |
+
+Two things came out of this.
+
+**Validation loss cannot rank model sizes here.** All four runs land on the same
+0.75-0.80, and the seed-to-seed spread is about 1%. The loss has a floor it cannot go
+below: the objective asks the model to predict the noise that we inject into the
+embeddings ourselves (`x0_noise_std = 0.25`), and that part is unpredictable by
+construction. Bigger models reach the floor with fewer tokens per parameter, they do not
+reach a lower floor.
+
+**Validity keeps improving long after the loss has flattened.** The probes above ran to
+60 t/p and gave 3.7% and 4.9% validity, while the 20 t/p runs of the next section gave
+around 1%. So the loss curve is not a stopping criterion, and the budget has to be set
+from the generation metric instead.
+
+## Grammar loss: does it help?
+
+The penalty on parenthesis balance and ring parity, at the pre-refactor weight 0.001,
+against the same run with the term switched off. Both at 20 t/p (4,400 steps).
+
+| run | validity | uniqueness | diversity |
+|---|---|---|---|
+| grammar 0.001, seed 42 | 1.051% (0.87-1.27) | 100% | 0.919 |
+| grammar 0.001, seed 43 | 0.854% (0.69-1.05) | 100% | 0.921 |
+| grammar off, seed 42 | **1.504%** (1.28-1.76) | 96.0% | 0.918 |
+| grammar off, seed 43 | **1.352%** (1.14-1.60) | 86.6% | 0.931 |
+
+Switching it off gives 1.43% against 0.95% on the mean of two seeds, and the intervals
+barely touch. The term hurts, exactly as the old ChEBI sweep suggested, and it also
+costs a softmax over the whole `(B, L, V)` logits tensor. It is off in everything below.

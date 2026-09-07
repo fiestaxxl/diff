@@ -29,7 +29,7 @@ def main(cfg: DictConfig) -> None:
         raise KeyError("set generate.samples to a file with one SMILES per line")
 
     path = Path(samples_path)
-    files = sorted(path.glob("ba*.txt")) if path.is_dir() else [path]
+    files = sorted(path.glob("*.txt")) if path.is_dir() else [path]
     if not files:
         raise FileNotFoundError(f"no sample files under {path}")
 
@@ -41,6 +41,21 @@ def main(cfg: DictConfig) -> None:
         reports[file.name] = metrics
         print(f"\n=== {file}")
         print(format_report(metrics))
+
+    if len(reports) > 1:
+        print(f"\n{'run':<24}{'valid':>8}{'95% CI':>16}{'uniq':>8}{'novel':>8}{'div':>7}"
+              f"{'parens':>8}{'rings':>7}{'other':>7}")
+        for name, m in sorted(reports.items(), key=lambda kv: -kv[1]["validity"]):
+            lo, hi = m["validity_ci95"]
+            fails = m.get("failures", {})
+            total_fail = max(sum(fails.values()), 1)
+            print(f"{name.replace('.txt', ''):<24}{m['validity'] * 100:>7.2f}%"
+                  f"{f'{lo * 100:.2f}-{hi * 100:.2f}':>16}"
+                  f"{m['uniqueness'] * 100:>7.1f}%{m['novelty'] * 100:>7.1f}%"
+                  f"{m['diversity']:>7.3f}"
+                  f"{fails.get('unbalanced_parens', 0) / total_fail * 100:>7.0f}%"
+                  f"{fails.get('odd_ring_digits', 0) / total_fail * 100:>6.0f}%"
+                  f"{fails.get('other', 0) / total_fail * 100:>6.0f}%")
 
     out = (path if path.is_dir() else path.parent) / "metrics.json"
     out.write_text(json.dumps(reports, indent=2, default=str))

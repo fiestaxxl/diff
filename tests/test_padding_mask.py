@@ -85,3 +85,27 @@ def test_mask_padding_requires_the_mask(model_and_path, batches) -> None:
     )
     with pytest.raises(ValueError):
         task.compute_loss(model, {"token_ids": full["token_ids"]})
+
+
+def test_ce_input_x0_hat_changes_the_gradient_path(model_and_path, batches, deterministic) -> None:
+    """With ce_input=x0_hat the cross-entropy is computed on the denoiser output, so its
+    gradient reaches the denoiser weights; with x0 it only touches the readout and the
+    embedding table."""
+    model, path = model_and_path
+    full, _ = batches
+    for ce_input, expect_denoiser_grad in (("x0", False), ("x0_hat", True)):
+        model.zero_grad(set_to_none=True)
+        task = DiffusionTask(
+            path, pad_idx=0, lambda_grammar=0.0, grammar_enabled=False, lambda_mse=0.0,
+            ce_alpha_threshold=0.0,  # every sample reaches the cross-entropy
+            seq_len=STORED, autocast=nullcontext, ce_input=ce_input,
+        )
+        metrics = task.compute_loss(model, full)
+        metrics["loss"].backward()
+        # up_proj belongs to the denoiser only: it is not touched by the readout or the
+        # embedding table. Parameters inside the blocks are useless for this check,
+        # because adaLN-Zero starts with a closed residual gate and they see no gradient
+        # on the first step either way.
+        denoiser = model.up_proj.weight
+        has_grad = denoiser.grad is not None and bool(denoiser.grad.abs().sum() > 0)
+        assert has_grad is expect_denoiser_grad, (ce_input, has_grad)
