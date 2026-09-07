@@ -83,6 +83,7 @@ class DiffusionTask(Task):
         ce_input: str = "x0",
         mask_padding: str = "none",
         pad_weight: float = 1.0,
+        ce_include_pad: bool = False,
         min_snr_gamma: Optional[float] = None,
         decoder_pretrain_steps: int = 0,
         grammar_enabled: bool = True,
@@ -137,6 +138,11 @@ class DiffusionTask(Task):
         if not 0.0 <= float(pad_weight) <= 1.0:
             raise ValueError(f"loss.pad_weight={pad_weight!r} must be in [0, 1]")
         self.pad_weight = float(pad_weight)
+        # The original cross-entropy ignores padding, so the readout is never told to
+        # emit it. On a fixed canvas padding is the only way a molecule can end, and the
+        # model's main failure is not ending; including it gives that decision explicit
+        # supervision at the cost of a very frequent, very easy class.
+        self.ce_include_pad = bool(ce_include_pad)
         if min_snr_gamma is not None and float(min_snr_gamma) <= 0.0:
             raise ValueError(f"loss.min_snr_gamma={min_snr_gamma!r} must be > 0 or null")
         self.min_snr_gamma = None if min_snr_gamma is None else float(min_snr_gamma)
@@ -314,7 +320,7 @@ class DiffusionTask(Task):
             ce_loss = F.cross_entropy(
                 logits[ce_sample_mask].reshape(-1, logits.size(-1)),
                 token_ids[ce_sample_mask].reshape(-1),
-                ignore_index=self.pad_idx,
+                ignore_index=-100 if self.ce_include_pad else self.pad_idx,
                 label_smoothing=self.label_smoothing,
                 reduction="mean",
                 weight=self.class_weights,

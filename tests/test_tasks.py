@@ -160,3 +160,31 @@ def test_min_snr_and_pad_weight_compose():
     model, batch = _tiny_denoiser(), _batch()
     out = _diffusion_task(min_snr_gamma=5.0, pad_weight=0.3).compute_loss(model, batch)
     assert torch.isfinite(out["loss"])
+
+
+def test_ce_ignores_padding_by_default_and_can_include_it():
+    torch.manual_seed(0)
+    model, batch = _tiny_denoiser(), _batch(batch_size=16)
+    torch.manual_seed(7)
+    without = float(_diffusion_task().compute_loss(model, batch)["ce_loss"])
+    torch.manual_seed(7)
+    with_pad = float(_diffusion_task(ce_include_pad=True).compute_loss(model, batch)["ce_loss"])
+    assert without != with_pad
+
+
+def test_including_padding_teaches_the_readout_to_emit_it():
+    """The gradient on the padding row of the readout must be non-zero only then."""
+    torch.manual_seed(0)
+    batch = _batch(batch_size=16)
+    grads = {}
+    for include in (False, True):
+        model = _tiny_denoiser()
+        torch.manual_seed(0)
+        for p in model.parameters():
+            p.grad = None
+        torch.manual_seed(7)
+        task = _diffusion_task(ce_include_pad=include, lambda_mse=0.0)
+        task.compute_loss(model, batch)["loss"].backward()
+        row = model.out_proj.weight.grad[0] if model.out_proj.weight.grad is not None else None
+        grads[include] = 0.0 if row is None else float(row.abs().sum())
+    assert grads[True] > grads[False]

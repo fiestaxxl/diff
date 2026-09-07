@@ -178,6 +178,7 @@ def build_task(
             "grammar_alpha_threshold": float(loss_cfg.get("grammar_alpha_threshold", 0.5)),
             "mask_padding": loss_cfg.get("mask_padding", "none"),
             "pad_weight": float(loss_cfg.get("pad_weight", 1.0)),
+            "ce_include_pad": bool(loss_cfg.get("ce_include_pad", False)),
             "min_snr_gamma": (
                 None
                 if loss_cfg.get("min_snr_gamma") is None
