@@ -66,6 +66,11 @@ class DiffusionTask(Task):
         pad_idx: int = 0,
         regime: str = "epsilon",
         x0_noise_std: float = 0.25,
+        x0_noise_kind: str = "gaussian",
+        embedding_norm: str = "none",
+        time_sampler: str = "uniform",
+        time_logit_mean: float = 0.0,
+        time_logit_std: float = 1.0,
         t_eps: float = 5e-5,
         lambda_mse: float = 1.0,
         lambda_ce: float = 1.0,
@@ -76,7 +81,7 @@ class DiffusionTask(Task):
         grammar_alpha_threshold: float = 0.5,
         label_smoothing: float = 0.0,
         ce_input: str = "x0",
-        mask_padding: bool = False,
+        mask_padding: str = "none",
         decoder_pretrain_steps: int = 0,
         grammar_enabled: bool = True,
         class_weights: Optional[torch.Tensor] = None,
@@ -94,6 +99,17 @@ class DiffusionTask(Task):
         self.pad_idx = pad_idx
         self.regime = regime
         self.x0_noise_std = x0_noise_std
+        if x0_noise_kind not in ("gaussian", "laplace", "sphere", "token_mixup"):
+            raise ValueError(f"diffusion.x0_noise_kind={x0_noise_kind!r} is unknown")
+        self.x0_noise_kind = x0_noise_kind
+        if embedding_norm not in ("none", "rms"):
+            raise ValueError(f"diffusion.embedding_norm={embedding_norm!r} is unknown")
+        self.embedding_norm = embedding_norm
+        if time_sampler not in ("uniform", "logit_normal"):
+            raise ValueError(f"diffusion.time_sampler={time_sampler!r} is unknown")
+        self.time_sampler = time_sampler
+        self.time_logit_mean = time_logit_mean
+        self.time_logit_std = time_logit_std
         self.t_eps = t_eps
         self.lambda_mse = lambda_mse
         self.lambda_ce = lambda_ce
@@ -106,7 +122,13 @@ class DiffusionTask(Task):
         if ce_input not in ("x0", "x0_hat"):
             raise ValueError(f"loss.ce_input={ce_input!r}; expected 'x0' or 'x0_hat'")
         self.ce_input = ce_input
+        if isinstance(mask_padding, bool):
+            mask_padding = "both" if mask_padding else "none"
+        if mask_padding not in ("none", "attention", "loss", "both"):
+            raise ValueError(f"loss.mask_padding={mask_padding!r} is unknown")
         self.mask_padding = mask_padding
+        self.mask_attention = mask_padding in ("attention", "both")
+        self.mask_loss = mask_padding in ("loss", "both")
         self.decoder_pretrain_steps = decoder_pretrain_steps
         self.grammar_enabled = grammar_enabled and lambda_grammar != 0.0
         self.class_weights = class_weights
@@ -124,6 +146,36 @@ class DiffusionTask(Task):
             raise ValueError("grammar loss is enabled but paren_delta/ring_count tables are missing")
 
     # ------------------------------------------------------------------
+    def _sample_x0_noise(self, reference, token_ids, embed) -> torch.Tensor:
+        """Corruption applied to the data latents before diffusion.
+
+        "gaussian" is the original isotropic noise. "laplace" and "sphere" keep the same
+        per-dimension variance but change the shape of the perturbation. "token_mixup"
+        moves the latent towards the embedding of another token instead of a random
+        direction, so the corruption stays on the data manifold and the denoiser is asked
+        which token it was rather than how to remove isotropic noise.
+        """
+        kind = self.x0_noise_kind
+        if kind == "gaussian":
+            return torch.randn_like(reference)
+        if kind == "laplace":
+            u = torch.rand_like(reference) - 0.5
+            return -(2 ** -0.5) * torch.sign(u) * torch.log1p(-2 * u.abs())
+        if kind == "sphere":
+            n = torch.randn_like(reference)
+            scale = reference.shape[-1] ** 0.5
+            return n / n.norm(dim=-1, keepdim=True).clamp(min=1e-6) * scale
+        other = torch.randint_like(token_ids, low=1, high=int(embed.num_embeddings))
+        return embed(other) - reference
+
+    def _sample_time(self, batch_size: int, device) -> torch.Tensor:
+        eps = self.t_eps
+        if self.time_sampler == "uniform":
+            return torch.rand(batch_size, 1, 1, device=device) * (1 - 2 * eps) + eps
+        logits = torch.randn(batch_size, 1, 1, device=device)
+        t = torch.sigmoid(self.time_logit_mean + self.time_logit_std * logits)
+        return t.clamp(eps, 1 - eps)
+
     def compute_loss(
         self, model: nn.Module, batch: Dict[str, torch.Tensor], step: int = 0
     ) -> Dict[str, torch.Tensor]:
@@ -148,7 +200,7 @@ class DiffusionTask(Task):
         # as commented-out code; it is what makes length bucketing safe, because the
         # objective then stops depending on how many pad positions a batch contains.
         pad_mask = batch.get("attention_mask")
-        if self.mask_padding and pad_mask is None:
+        if self.mask_padding != "none" and pad_mask is None:
             raise ValueError("loss.mask_padding=true needs 'attention_mask' in the batch")
 
         raw = unwrap_model(model)
@@ -156,13 +208,20 @@ class DiffusionTask(Task):
         get_logits = raw.out_proj
 
         token_embeddings = embed(token_ids)
+        if self.embedding_norm == "rms":
+            # fix the latent scale: the raw table grows by ~50x over a run, which silently
+            # changes the signal-to-noise ratio of the whole schedule
+            token_embeddings = token_embeddings / token_embeddings.pow(2).mean(
+                -1, keepdim=True
+            ).add(1e-8).sqrt()
 
-        x0 = token_embeddings + torch.randn_like(token_embeddings) * self.x0_noise_std
+        x0 = token_embeddings + self._sample_x0_noise(
+            token_embeddings, token_ids, embed
+        ) * self.x0_noise_std
 
         batch_size, seq_len, emb_dim = x0.shape
 
-        eps = self.t_eps
-        t = torch.rand(batch_size, 1, 1, device=token_ids.device) * (1 - 2 * eps) + eps
+        t = self._sample_time(batch_size, token_ids.device)
 
         noise = torch.randn_like(x0)
 
@@ -176,12 +235,12 @@ class DiffusionTask(Task):
         target = noise if self.regime == "epsilon" else x0
 
         # (B, 1, 1, L) boolean mask; True marks positions that take part in attention
-        attn_mask = pad_mask[:, None, None, :].bool() if self.mask_padding else None
+        attn_mask = pad_mask[:, None, None, :].bool() if self.mask_attention else None
         forward_ctx = nullcontext if self.autocast_scope == "loss" else self.autocast
         with forward_ctx():
             eps_theta = model(input_embeddings=x, time=time, attention_mask=attn_mask)
 
-        if self.mask_padding:
+        if self.mask_loss:
             loss_mask = pad_mask.float()  # (B, L)
             n_valid = loss_mask.sum(-1).clamp(min=1)  # (B,)
             mse_per_pos = ((eps_theta - target) ** 2).mean(dim=-1)  # (B, L)
@@ -200,7 +259,7 @@ class DiffusionTask(Task):
 
         # ----- Reconstruction MSE (only at low-noise / high-alpha steps) -----
         mse_t0_sample_mask = (alpha > self.mse_t0_alpha_threshold).squeeze(-1).squeeze(-1)  # (B,)
-        if self.mask_padding:
+        if self.mask_loss:
             mse_t0_loss_mask = loss_mask * mse_t0_sample_mask[:, None].float()  # (B, L)
         else:
             mse_t0_loss_mask = mse_t0_sample_mask[:, None].float()  # (B, 1)

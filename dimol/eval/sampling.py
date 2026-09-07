@@ -14,7 +14,7 @@ import torch
 
 from dimol.diffusion.diff_eqs import LearnedScoreSDE
 from dimol.diffusion.simulators import EulerMaruyamaSimulator
-from dimol.models.denoiser import DenoiserModel
+from dimol.models.denoiser import ClampedDenoiserModel, DenoiserModel
 from dimol.training.distributed import unwrap_model
 
 
@@ -29,6 +29,9 @@ class SamplingParams:
     batch_size: Optional[int] = None
     regime: str = "epsilon"
     progress: bool = False
+    clamp_strength: float = 0.0   # pull the x0 estimate onto the nearest token embedding
+    clamp_from_alpha: float = 0.5  # only once the estimate carries information
+    decode: str = "argmax"        # argmax | grammar (see dimol/eval/decoding.py)
 
 
 @torch.no_grad()
@@ -39,10 +42,19 @@ def sample_smiles(
     params: SamplingParams,
     device: str | torch.device,
 ) -> List[str]:
+    from dimol.eval.decoding import build_decoder
+
     raw = unwrap_model(model)
     get_logits = raw.out_proj
+    decoder = build_decoder(tokenizer, canvas=path.p_simple.shape[0], mode=params.decode)
 
-    score_model = DenoiserModel(model, path, regime=params.regime)
+    if params.clamp_strength > 0:
+        score_model = ClampedDenoiserModel(
+            model, path, regime=params.regime,
+            strength=params.clamp_strength, from_alpha=params.clamp_from_alpha,
+        )
+    else:
+        score_model = DenoiserModel(model, path, regime=params.regime)
     sde = LearnedScoreSDE(path, score_model, params.variance)
     simulator = EulerMaruyamaSimulator(sde)
 
@@ -59,8 +71,12 @@ def sample_smiles(
             .to(device)
         )
         xts = simulator.simulate(x0, ts, use_bar=params.progress)
-        ids = get_logits(xts).softmax(-1).argmax(-1).detach().cpu().tolist()
-        smiles.extend(tokenizer.decode_batch(ids, special_decode=True))
+        logits = get_logits(xts)
+        if decoder is None:
+            ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
+            smiles.extend(tokenizer.decode_batch(ids, special_decode=True))
+        else:
+            smiles.extend(decoder.decode(logits.detach()))
         done += b
     return smiles
 

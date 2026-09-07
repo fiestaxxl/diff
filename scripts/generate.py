@@ -56,6 +56,9 @@ def main(cfg: DictConfig) -> None:
         batch_size=int(gen.get("batch_size") or 500),
         regime=str(gen.get("regime") or cfg.diffusion.get("regime", "epsilon")),
         progress=bool(gen.get("progress", True)),
+        clamp_strength=float(gen.get("clamp_strength", 0.0)),
+        clamp_from_alpha=float(gen.get("clamp_from_alpha", 0.5)),
+        decode=str(gen.get("decode", "argmax")),
     )
 
     print("generating...")
