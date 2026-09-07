@@ -290,14 +290,26 @@ class DiffusionTask(Task):
         x0_self = None
         raw_model = unwrap_model(model)
         if getattr(raw_model, "self_conditioning", False) and self.self_cond_prob > 0:
-            use = torch.rand((), device=x.device) < self.self_cond_prob
-            if bool(use):
+            # Two things here are about DDP, and both were bugs.
+            #
+            # The decision has to be identical on every rank. Drawing it locally made
+            # some ranks run the extra pass and others not, which is a structural
+            # divergence inside one iteration. Seeding a CPU generator with the step
+            # gives every rank the same coin without any communication.
+            #
+            # And the extra pass must go through the unwrapped module, never the DDP
+            # wrapper. DDP prepares its gradient reducer on every forward; a second
+            # forward in one iteration leaves the buckets out of step with the other
+            # ranks and the next iteration deadlocks in the all-reduce. It cost a
+            # 400-step benchmark that logged step 1 and then hung forever.
+            coin = torch.rand((), generator=torch.Generator().manual_seed(int(step)))
+            if float(coin) < self.self_cond_prob:
                 pre_kwargs = {"input_embeddings": x, "time": time,
                               "attention_mask": attn_mask}
                 if getattr(raw_model, "length_conditioning", False):
                     pre_kwargs["length"] = pad_mask.long().sum(-1)
                 with torch.no_grad(), forward_ctx():
-                    first = model(**pre_kwargs)
+                    first = raw_model(**pre_kwargs)
                 alpha_first = alpha.clamp(min=self.alpha_eps)
                 if self.regime == "epsilon":
                     x0_self = ((x - beta * first) / alpha_first).detach()

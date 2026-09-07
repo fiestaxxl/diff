@@ -146,3 +146,49 @@ def test_a_tied_readout_trains_through_both_uses():
     _task().compute_loss(model, batch)["loss"].backward()
     assert model.token_embedding.weight.grad is not None
     assert torch.isfinite(model.token_embedding.weight.grad).all()
+
+
+def test_the_extra_pass_never_goes_through_the_wrapper():
+    """DDP prepares its reducer on every forward: two forwards in one iteration deadlock."""
+
+    class CountingWrapper(torch.nn.Module):
+        """Stands in for DistributedDataParallel: counts how often it is called."""
+
+        def __init__(self, module):
+            super().__init__()
+            self.module = module
+            self.calls = 0
+
+        def forward(self, *args, **kwargs):
+            self.calls += 1
+            return self.module(*args, **kwargs)
+
+    torch.manual_seed(0)
+    wrapped = CountingWrapper(_model(True))
+    task = _task(self_cond_prob=1.0)
+    task.compute_loss(wrapped, _batch(), step=0)
+    assert wrapped.calls == 1, (
+        f"the wrapper was called {wrapped.calls} times; the self-conditioning pass must "
+        "use the unwrapped module"
+    )
+
+
+def test_the_self_conditioning_coin_is_the_same_on_every_rank():
+    """Every rank must take the same branch, so the decision comes from the step."""
+    model, batch = _model(True), _batch()
+    task = _task(self_cond_prob=0.5)
+    # the same step twice must behave identically, whatever local RNG state precedes it
+    torch.manual_seed(11)
+    a = task.compute_loss(model, batch, step=7)["loss"].item()
+    torch.manual_seed(11)
+    b = task.compute_loss(model, batch, step=7)["loss"].item()
+    assert a == b
+
+
+def test_the_coin_still_fires_on_about_half_the_steps():
+    task = _task(self_cond_prob=0.5)
+    fired = 0
+    for step in range(400):
+        coin = torch.rand((), generator=torch.Generator().manual_seed(int(step)))
+        fired += float(coin) < task.self_cond_prob
+    assert 150 < fired < 250, fired
