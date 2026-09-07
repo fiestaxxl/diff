@@ -475,3 +475,22 @@ argmax decoding, returns about 620 distinct valid molecules per 10,000 attempts.
 changes that cost nothing at training or sampling time, logit-normal timesteps with a
 heavier cross-entropy and closing repair at decoding, return 4039, with uniqueness above
 99% and a length distribution that still looks like the corpus.
+
+## The same four checkpoints at the same solver step count
+
+Everything above mixes 100- and 300-step generations, which is fine for large effects and
+sloppy for seed comparisons. These four were regenerated at 100 steps with argmax so that
+they are directly comparable.
+
+| run | validity | uniqueness |
+|---|---|---|
+| r_tl0_ce3 | 18.82% | 99.4% |
+| r_tlogit0, seed 42 | 15.29% | 99.9% |
+| r_tl0_s43, seed 43 | 14.20% | 99.8% |
+| r_base80, the reference | 5.55% | 99.8% |
+
+With the reference at 5.55% and 5.78% on its two seeds, and the timestep change at 15.29%,
+14.20% and 7.18% on three, the mean effect is a factor of 2.2 and the spread is a factor
+of two within the same configuration. The reference also prefers 300 solver steps while
+the logit-normal runs prefer 100, which is one more reason to state the step count next to
+every number.
