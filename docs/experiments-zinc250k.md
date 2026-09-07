@@ -803,3 +803,29 @@ point of the reverse process, so putting it back through the same score field re
 where it was. Long-range consistency is not information the sampler is discarding, which
 was the hypothesis; it is information the model does not have. That is the negative that
 pairs with the depth result and rules out the cheap way of getting it.
+
+## The variance survives every explanation offered for it
+
+Four hypotheses have now been tested against the run-to-run spread, three seeds each.
+
+| hypothesis | test | usable, mean | spread | verdict |
+|---|---|---|---|---|
+| the schedule needs longer warmup | warmup x4 | 8.44% | 7.8 pts | mean lower, spread unchanged |
+| the peak learning rate is too high | lr halved | 13.90% | 9.4 pts | nothing |
+| the readout chases a moving embedding table | readout tied to the table | 12.42% | 2.1 pts | nothing |
+| the gated batch fraction fluctuates | fixed top-k gate | 10.69% | 1.5 pts | mean lower, spread unchanged |
+| reference, for comparison | - | 12.90% | 0.6 pts | - |
+
+The deterministic gate is the most informative of the failures. Under uniform timesteps it
+lowers the mean, 10.69% against 12.90%, and leaves the spread where it was; under
+logit-normal timesteps its three seeds read 6.53%, 16.40% and 17.67%, an eleven-point
+spread with the lowest seed showing the usual collapse signature, 33.6% trivial molecules
+at 13.6 heavy atoms. So the amount of token-level supervision per step is not what makes
+runs differ.
+
+What is left is uncomfortable and worth stating plainly: two runs with the same seed and
+the same configuration landed at 23.9% and 55.5% validity, so the spread does not need a
+seed to appear. Numerical nondeterminism in the backward pass is enough to send a run to a
+different place on the length-fidelity trade-off, and nothing tried so far narrows it. The
+practical consequence stands: three seeds per configuration, and an effect is only an
+effect when the worst seed of a group beats the best seed of the reference.
