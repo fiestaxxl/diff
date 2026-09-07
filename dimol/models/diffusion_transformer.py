@@ -49,6 +49,16 @@ class TransformerConfig:
     # them, which is the standard fix in language models and a candidate explanation for
     # the run-to-run spread measured here.
     tie_readout: bool = False
+
+    # ---- length conditioning ----
+    # On a padded canvas the objective has a degenerate optimum at short sequences: two
+    # thirds of the training positions are padding, so ending early lowers the loss, and
+    # the runs that collapse that way score high on validity and badly on every
+    # distribution metric. Conditioning at sampling time alone does not work, because the
+    # model's plan for the canvas never depended on the length. This gives the model the
+    # length as an input, embedded like the timestep and added to it, so the plan is
+    # conditioned on it. The embedding starts at zero, so a fresh model is unchanged.
+    length_conditioning: bool = False
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -90,6 +100,9 @@ class DiffusionTransformer(nn.Module):
         self.up_proj = nn.Linear(in_dim, config.model_dim)
 
         self.time_embeddings = TimeEmbeddings(config)
+        self.length_conditioning = bool(getattr(config, "length_conditioning", False))
+        if self.length_conditioning:
+            self.length_embedding = nn.Embedding(config.max_pos + 1, config.time_dim)
 
         self.text_rope_embeddings = RoPE1D(config, dim=config.model_dim // config.num_heads)
         self.text_transformer_blocks = nn.ModuleList(
@@ -106,6 +119,9 @@ class DiffusionTransformer(nn.Module):
 
         self.apply(self._init_params)
         self._init_special_layers()
+        if self.length_conditioning:
+            with torch.no_grad():
+                self.length_embedding.weight.zero_()
         if bool(getattr(config, "tie_readout", False)):
             # one parameter, two uses: the readout is now a similarity to the embeddings
             self.out_proj.weight = self.token_embedding.weight
@@ -150,6 +166,7 @@ class DiffusionTransformer(nn.Module):
         time: torch.Tensor,             # (B,) or (B, 1) in [0, 1]
         attention_mask: Optional[torch.Tensor] = None,
         x0_self: Optional[torch.Tensor] = None,  # previous x0 estimate, (B, T, C)
+        length: Optional[torch.Tensor] = None,   # non-padding token count, (B,)
     ):
         if self.self_conditioning:
             if x0_self is None:
@@ -169,6 +186,18 @@ class DiffusionTransformer(nn.Module):
         # text_embed = self.token_embedding(input_ids)
         text_embed = input_embeddings
         time_embed = self.time_embeddings(time)
+        if self.length_conditioning:
+            if length is None:
+                raise ValueError(
+                    "model.length_conditioning is on but no length was passed; "
+                    "training takes it from the attention mask and sampling draws it"
+                )
+            clamped = length.to(text_embed.device).long().clamp(0, self.config.max_pos)
+            time_embed = time_embed + self.length_embedding(clamped)
+        elif length is not None:
+            raise ValueError(
+                "a length was passed but model.length_conditioning is off"
+            )
         rope_pos = torch.arange(T, device=device).unsqueeze(0).expand(B, T)
         # rope = self.text_rope_embeddings(rope_pos)
         cos, sin = self.text_rope_embeddings(rope_pos)

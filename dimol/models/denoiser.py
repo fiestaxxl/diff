@@ -22,6 +22,7 @@ class DenoiserModel(nn.Module):
         self.path = path
         self.regime = regime
         self._x0_self = None
+        self.length = None  # set by the sampler when the model is length-conditioned
 
     def reset(self):
         self._x0_self = None
@@ -32,8 +33,11 @@ class DenoiserModel(nn.Module):
         alpha_t = torch.clamp(self.path.alpha(t), min=1e-3)
         beta_t  = torch.clamp(self.path.beta(t),  min=1e-3)
         t_in    = t.squeeze(-1)
-        if getattr(unwrap_model(self.eps_model), "self_conditioning", False):
+        raw = unwrap_model(self.eps_model)
+        if getattr(raw, "self_conditioning", False):
             kwargs["x0_self"] = self._x0_self
+        if getattr(raw, "length_conditioning", False) and self.length is not None:
+            kwargs["length"] = self.length
         pred    = self.eps_model(x, t_in, **kwargs)
 
         if self.regime == 'epsilon':

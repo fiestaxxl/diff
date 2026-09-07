@@ -267,8 +267,12 @@ class DiffusionTask(Task):
         if getattr(raw_model, "self_conditioning", False) and self.self_cond_prob > 0:
             use = torch.rand((), device=x.device) < self.self_cond_prob
             if bool(use):
+                pre_kwargs = {"input_embeddings": x, "time": time,
+                              "attention_mask": attn_mask}
+                if getattr(raw_model, "length_conditioning", False):
+                    pre_kwargs["length"] = pad_mask.long().sum(-1)
                 with torch.no_grad(), forward_ctx():
-                    first = model(input_embeddings=x, time=time, attention_mask=attn_mask)
+                    first = model(**pre_kwargs)
                 alpha_first = alpha.clamp(min=self.alpha_eps)
                 if self.regime == "epsilon":
                     x0_self = ((x - beta * first) / alpha_first).detach()
@@ -276,6 +280,12 @@ class DiffusionTask(Task):
                     x0_self = first.detach()
 
         forward_kwargs = {"input_embeddings": x, "time": time, "attention_mask": attn_mask}
+        if getattr(raw_model, "length_conditioning", False):
+            if pad_mask is None:
+                raise ValueError(
+                    "model.length_conditioning needs 'attention_mask' in the batch"
+                )
+            forward_kwargs["length"] = pad_mask.long().sum(-1)
         if getattr(raw_model, "self_conditioning", False):
             forward_kwargs["x0_self"] = x0_self  # None means "zeros", handled by the model
         with forward_ctx():

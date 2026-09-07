@@ -109,6 +109,12 @@ def sample_smiles(
 
     raw = unwrap_model(model)
     get_logits = raw.out_proj
+    needs_length = bool(getattr(raw, "length_conditioning", False))
+    if needs_length and params.length_prior is None:
+        raise ValueError(
+            "this model was trained with length conditioning, so generate.length_prior "
+            "has to say where the lengths come from"
+        )
     decoder = build_decoder(tokenizer, canvas=path.p_simple.shape[0], mode=params.decode,
                             allowed_brackets=params.allowed_brackets,
                             on_disallowed=params.on_disallowed, strict=params.strict)
@@ -162,6 +168,8 @@ def sample_smiles(
 
         if hasattr(score_model, "reset"):
             score_model.reset()  # self-conditioning must not carry across batches
+        if needs_length:
+            score_model.length = drawn_lengths.to(device)
         xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
         logits = get_logits(xts)
         if decoder is None:

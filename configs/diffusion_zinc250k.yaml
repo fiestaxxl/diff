@@ -53,6 +53,17 @@ model:
                                # 256/4 gives 5.0M parameters: the workhorse for testing
                                # hypotheses fast. Scale it up with the same tokens per
                                # parameter budget (see docs/scaling-zinc250k.md)
+  tie_readout: false           # true makes the readout the embedding table itself, so it
+                               # is a similarity to the current embeddings instead of a
+                               # separate matrix chasing a table whose norm grows fiftyfold
+                               # over a run
+  length_conditioning: false   # true gives the model the non-padding token count as an
+                               # input, embedded like the timestep and added to it.
+                               # Training reads it from the attention mask, sampling draws
+                               # it from generate.length_prior. Conditioning only at
+                               # sampling time does not work: the model's plan for the
+                               # canvas never depended on the length, and forcing it to
+                               # fill one produced 60-atom garbage
   self_conditioning: false     # true gives the denoiser a second input of the same shape
                                # as the latent: its own previous estimate of x0. Training
                                # produces that estimate on loss.self_cond_prob of the
