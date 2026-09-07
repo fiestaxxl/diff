@@ -127,6 +127,16 @@ class DDPConfig:
 
 
 @dataclass
+class EmaConfig:
+    """Averaged weights for sampling; written next to the checkpoint as <name>_ema."""
+
+    enabled: bool = False
+    decay: float = 0.999
+    start_step: int = 0
+    update_every: int = 1
+
+
+@dataclass
 class SamplingConfig:
     """Periodic generation during training (diffusion only)."""
 
@@ -200,6 +210,7 @@ class DimolConfig:
 
     # ---- generation during training and in scripts/generate.py ----
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
+    ema: EmaConfig = field(default_factory=EmaConfig)
     generate: Dict[str, Any] = field(default_factory=dict)
 
     # ---- data preparation: scripts/train_tokenizer.py, scripts/tokenize_dataset.py ----

@@ -77,6 +77,7 @@ def make_cfg(**over) -> DictConfig:
         "autoresume": False, "load_path": None, "load_weights_only": False,
         "algorithms": {"gradient_clipping": {"clipping_type": "norm", "clipping_threshold": 1.0}},
         "sampling": {"enabled": False, "interval": "2ba", "log_examples": 2},
+        "ema": {"enabled": False, "decay": 0.999, "start_step": 0, "update_every": 1},
     }
     base.update(over)
     return OmegaConf.create(base)
@@ -192,3 +193,24 @@ def test_bad_clipping_type_raises() -> None:
     with pytest.raises(ValueError):
         build(make_cfg(algorithms={"gradient_clipping":
                                    {"clipping_type": "value", "clipping_threshold": 1.0}}))
+
+
+def test_ema_is_written_next_to_the_checkpoint(tmp_path: Path) -> None:
+    """With ema on, saving writes an extra <name>_ema directory and the averaged
+    weights differ from the live ones, while autoresume still finds only the real one."""
+    from dimol.training.checkpoint import latest_checkpoint
+
+    model = ToyModel()
+    cfg = make_cfg(save_folder=str(tmp_path), save_interval="2ba", save_last=True,
+                   eval_interval="100ba", max_duration="4ba",
+                   ema={"enabled": True, "decay": 0.9, "start_step": 0, "update_every": 1})
+    trainer, _, _, _ = build(cfg, model=model)
+    trainer.fit()
+
+    dirs = {p.name for p in (tmp_path / "toy").iterdir() if p.is_dir()}
+    assert any(name.endswith("_ema") for name in dirs), dirs
+    assert latest_checkpoint(tmp_path / "toy").name == "ep1-ba4"  # _ema is not resumable
+
+    live = model.w.detach().clone()
+    averaged = trainer.ema.shadow["w"]
+    assert not torch.allclose(live, averaged.to(live.dtype)), "ema equals the live weights"

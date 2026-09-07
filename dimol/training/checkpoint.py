@@ -68,9 +68,10 @@ def save_checkpoint(
     weights_only: bool = False,
     keep_last: int = 3,
     extra: Optional[Dict[str, Any]] = None,
+    suffix: str = "",
 ) -> Path:
     root = Path(root)
-    out = root / _ckpt_name(state.epoch, state.step)
+    out = root / (_ckpt_name(state.epoch, state.step) + suffix)
     out.mkdir(parents=True, exist_ok=True)
 
     raw = unwrap_model(model)

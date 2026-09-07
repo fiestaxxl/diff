@@ -47,6 +47,11 @@ prepare:
       val: val
       test: test
 
+  # ---- random-traversal augmentation of the train split ----
+  augment:
+    variants: 4                # distinct SMILES per molecule, including the canonical one
+    out_dir: ${variables.root}/corpus_aug
+
   # ---- tokenization into arrays ----
   tokenized_dir: ${variables.root}/tokenized
   max_length: 64               # from the audit: p99 is 37 tokens and the longest

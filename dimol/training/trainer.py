@@ -25,6 +25,7 @@ from dimol.config import Duration, duration_hit, duration_reached
 from dimol.training import checkpoint as ckpt_utils
 from dimol.training.checkpoint import TrainerState
 from dimol.training.distributed import DistEnv, all_reduce_min, reduce_metrics
+from dimol.training.ema import EmaWeights
 from dimol.training.logging import (
     MultiLogger,
     format_step_line,
@@ -68,6 +69,16 @@ class Trainer:
 
         self.state = TrainerState()
         self._last_saved: Optional[tuple[int, int]] = None
+        self.ema = (
+            EmaWeights(
+                model,
+                decay=float(cfg.ema.decay),
+                start_step=int(cfg.ema.start_step),
+                update_every=int(cfg.ema.update_every),
+            )
+            if bool(cfg.ema.enabled)
+            else None
+        )
         self.grad_accum_steps = int(cfg.device_train_grad_accum or 1)
         self.micro_per_epoch = self._loader_len(train_loader)
         if self.micro_per_epoch == 0:
@@ -222,6 +233,8 @@ class Trainer:
 
                 optimizer.zero_grad(set_to_none=True)
                 micro_step = 0
+                if self.ema is not None:
+                    self.ema.update(model, self.state.step)
 
                 if self.env.device_type == "cuda" and bool(cfg.sync_each_step):
                     torch.cuda.synchronize()  # wait for the GPU before timing
@@ -491,5 +504,17 @@ class Trainer:
                 keep_last=int(self.cfg.save_num_checkpoints_to_keep),
             )
             print(f"[ckpt] saved: {path}", flush=True)
+            if self.ema is not None:
+                replaced = self.ema.swap_into(self.model)
+                ema_path = ckpt_utils.save_checkpoint(
+                    self.ckpt_root,
+                    self.model,
+                    self.state,
+                    weights_only=True,
+                    keep_last=0,
+                    suffix="_ema",
+                )
+                self.ema.restore(self.model, replaced)
+                print(f"[ckpt] averaged weights: {ema_path}", flush=True)
         if self.env.ddp:
             dist.barrier()
