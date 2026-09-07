@@ -28,6 +28,16 @@ generate:
                                  # the cheap default for screening
   variance: 1.0                  # noise in the reverse SDE. 1.0 is best measured; 0.0 is
                                  # the deterministic probability flow and 1.4 points worse
+  strict_decode: false           # true replaces the bracket and ring-digit counting with
+                                 # the full connectivity check: no ring closed onto its
+                                 # own atom, no closure duplicating an existing bond, no
+                                 # empty branch. Counting alone lets through about half
+                                 # of all attempts as unparseable
+  restrict_atoms: false          # true forbids bracket atoms the training corpus never
+                                 # uses ([CH], [P], [SH] and friends, 14-16% of accepted
+                                 # molecules carry one); needs train_smiles_path
+  on_disallowed: next_best       # for a forbidden atom: next_best lets the model choose
+                                 # again inside the allowed vocabulary, skip drops it
   time_grid: uniform             # where the solver puts its steps: uniform (original),
                                  # data_dense, noise_dense, mid_dense, ends_dense. The
                                  # endpoints and the step count are the same either way

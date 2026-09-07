@@ -26,6 +26,23 @@ from dimol.models.diffusion_transformer import DiffusionTransformer  # noqa: E40
 from dimol.training.distributed import seed_all  # noqa: E402
 
 
+def _allowed_brackets(gen: dict):
+    """The bracket atoms the training corpus uses, when the config asks for the restriction.
+
+    Off by default: it changes what the decoder may emit, so it has to be requested.
+    """
+    if not gen.get("restrict_atoms"):
+        return None
+    from dimol.eval.decoding import corpus_brackets
+
+    source = gen.get("atom_vocab_path") or gen.get("train_smiles_path")
+    if not source:
+        raise KeyError("generate.restrict_atoms needs generate.train_smiles_path")
+    found = frozenset(corpus_brackets(source, limit=gen.get("atom_vocab_limit")))
+    print(f"restricting bracket atoms to the {len(found)} the corpus uses")
+    return found
+
+
 def main(cfg: DictConfig) -> None:
     gen = OmegaConf.to_container(cfg.generate, resolve=True) or {}
     checkpoint = gen.get("checkpoint")
@@ -59,6 +76,9 @@ def main(cfg: DictConfig) -> None:
         clamp_strength=float(gen.get("clamp_strength", 0.0)),
         clamp_from_alpha=float(gen.get("clamp_from_alpha", 0.5)),
         decode=str(gen.get("decode", "argmax")),
+        allowed_brackets=_allowed_brackets(gen),
+        on_disallowed=str(gen.get("on_disallowed", "next_best")),
+        strict=bool(gen.get("strict_decode", False)),
         time_grid=str(gen.get("time_grid", "uniform")),
         time_grid_power=float(gen.get("time_grid_power", 2.0)),
     )

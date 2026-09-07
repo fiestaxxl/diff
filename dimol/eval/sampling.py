@@ -32,6 +32,9 @@ class SamplingParams:
     clamp_strength: float = 0.0   # pull the x0 estimate onto the nearest token embedding
     clamp_from_alpha: float = 0.5  # only once the estimate carries information
     decode: str = "argmax"        # argmax | grammar (see dimol/eval/decoding.py)
+    allowed_brackets: Optional[frozenset] = None  # bracket atoms the corpus contains
+    on_disallowed: str = "next_best"  # what to do with an atom outside that set
+    strict: bool = False          # full connectivity check instead of bracket counting
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
 
@@ -82,7 +85,9 @@ def sample_smiles(
 
     raw = unwrap_model(model)
     get_logits = raw.out_proj
-    decoder = build_decoder(tokenizer, canvas=path.p_simple.shape[0], mode=params.decode)
+    decoder = build_decoder(tokenizer, canvas=path.p_simple.shape[0], mode=params.decode,
+                            allowed_brackets=params.allowed_brackets,
+                            on_disallowed=params.on_disallowed, strict=params.strict)
 
     if params.clamp_strength > 0:
         score_model = ClampedDenoiserModel(

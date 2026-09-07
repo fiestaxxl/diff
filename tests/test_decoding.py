@@ -120,3 +120,81 @@ def test_an_unknown_mode_is_reported():
         assert "expected" in str(err)
     else:
         raise AssertionError("an unknown decode mode must be rejected")
+
+
+def test_atoms_outside_the_corpus_vocabulary_are_replaced():
+    """[P@@] never occurs in the corpus, so the model's next choice is used instead."""
+    out = decode(["C", "[P@@]", "O"], second=[None, "N", None],
+                 allowed_brackets={"[13C]"})
+    assert out == "CNO"
+
+
+def test_atoms_outside_the_vocabulary_can_be_dropped_instead():
+    out = decode(["C", "[P@@]", "O"], second=[None, "N", None],
+                 allowed_brackets={"[13C]"}, on_disallowed="skip")
+    assert out == "CO"
+
+
+def test_an_allowed_bracket_atom_is_left_alone():
+    out = decode(["C", "[13C]", "O"], second=[None, "N", None],
+                 allowed_brackets={"[13C]"})
+    assert out == "C[13C]O"
+
+
+def test_without_a_vocabulary_nothing_is_banned():
+    assert decode(["C", "[P@@]", "O"]) == "C[P@@]O"
+
+
+def test_the_grammar_substitution_also_respects_the_vocabulary():
+    """A grammar fix must not reach for a banned atom either."""
+    out = decode(["C", ")", "O"], second=[None, "[P@@]", None],
+                 substitution="next_best", allowed_brackets={"[13C]"})
+    assert "P" not in out
+
+
+def test_corpus_brackets_reads_a_file_and_a_directory(tmp_path):
+    from dimol.eval.decoding import corpus_brackets
+
+    one = tmp_path / "train.txt"
+    one.write_text("C[NH+](C)C\nc1cc[nH]c1\nCCO\n")
+    assert corpus_brackets(one) == {"[NH+]", "[nH]"}
+
+    shards = tmp_path / "shards"
+    shards.mkdir()
+    (shards / "a.txt").write_text("CC(=O)[O-]\n")
+    (shards / "b.txt").write_text("C[C@H](N)C\n")
+    assert corpus_brackets(shards) == {"[O-]", "[C@H]"}
+    assert corpus_brackets(one, limit=1) == {"[NH+]"}
+
+
+def test_strict_decoding_refuses_a_ring_closed_onto_its_own_atom():
+    """CC22 has even digit parity, so only the strict state catches it."""
+    loose = decode(["C", "C", "2", "2", "<eos>"])
+    strict = decode(["C", "C", "2", "2", "<eos>"], strict=True)
+    assert loose == "CC22"
+    assert strict == "CC"  # the second 2 is refused, then the first one has to go
+
+
+def test_strict_decoding_refuses_a_closure_that_duplicates_a_bond():
+    """The closure is dropped, and the ring opener it left behind forces a trim back."""
+    assert decode(["C", "1", "C", "1", "<eos>"], strict=True) == "C"
+
+
+def test_strict_decoding_keeps_a_legal_ring():
+    assert decode(["C", "1", "C", "C", "1", "<eos>"], strict=True) == "C1CC1"
+
+
+def test_strict_decoding_closes_what_it_can_at_the_end():
+    out = decode(["C", "1", "C", "C", "(", "C", "<eos>"], strict=True, repair="close")
+    assert out == "C1CC(C1)"
+
+
+def test_strict_decoding_trims_when_nothing_legal_closes_the_string():
+    out = decode(["C", "1", "C", "<eos>"], strict=True, repair="close")
+    assert out == "C"  # closing ring 1 here would repeat the chain bond
+
+
+def test_strict_decoding_still_honours_the_atom_vocabulary():
+    out = decode(["C", "[P@@]", "O", "<eos>"], second=[None, "N", None],
+                 strict=True, allowed_brackets={"[13C]"})
+    assert out == "CNO"
