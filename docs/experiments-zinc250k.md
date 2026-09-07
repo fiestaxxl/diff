@@ -778,3 +778,28 @@ That is the argument for scale, and it is a specific one rather than a hope. Eve
 objective-side change in this study either moves yield at the cost of fidelity or improves
 both by a modest amount; the one structural property the corpus has and the samples lack
 responds only to depth and capacity.
+
+## Iterating the same model does not create what it lacks
+
+If the positions only need to see each other's decisions, refinement at sampling time
+should be enough: re-noise the finished sample part of the way back and denoise it again,
+so each pass is conditioned on the last one's output. It costs no training. Eight settings
+on the best checkpoint, 6000 attempts each:
+
+| rounds | re-noise to t | usable | aromatic rings | rings |
+|---|---|---|---|---|
+| 0 | - | 15.80% | 0.91 | 2.49 |
+| 1 | 0.9 | 15.80% | 0.91 | 2.49 |
+| 2 | 0.9 | 15.73% | 0.91 | 2.49 |
+| 4 | 0.9 | 15.73% | 0.91 | 2.49 |
+| 1 | 0.7 | 15.80% | 0.91 | 2.49 |
+| 2 | 0.7 | 15.80% | 0.91 | 2.49 |
+| 4 | 0.7 | 15.87% | 0.91 | 2.49 |
+| 2 | 0.5 | 15.53% | 0.88 | 2.41 |
+
+Nothing moves, and not because the code does nothing: at t = 0.5, where the re-noising is
+substantial, the numbers do shift, slightly downward. The finished sample sits at a fixed
+point of the reverse process, so putting it back through the same score field returns it
+where it was. Long-range consistency is not information the sampler is discarding, which
+was the hypothesis; it is information the model does not have. That is the negative that
+pairs with the depth result and rules out the cheap way of getting it.
