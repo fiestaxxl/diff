@@ -1,0 +1,525 @@
+<title>Fixed-Budget Screening on ZINC-250k</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper:#F4F6F9; --surface:#FFFFFF; --shade:#EDF1F7;
+    --ink:#151A25; --muted:#59617A; --rule:#DCE2EC;
+    --accent:#2A5FA8; --pos:#2C7355; --neg:#A33E2D; --warn:#8A6A1F;
+    --bar-pos:#3E9A73; --bar-neg:#C2604D;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:#10131C; --surface:#171C28; --shade:#1D2331;
+      --ink:#E6EAF3; --muted:#98A2B8; --rule:#262D3E;
+      --accent:#7FA7E8; --pos:#63BC97; --neg:#E08A76; --warn:#D3AC55;
+      --bar-pos:#3F8A69; --bar-neg:#A85843;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#10131C; --surface:#171C28; --shade:#1D2331;
+    --ink:#E6EAF3; --muted:#98A2B8; --rule:#262D3E;
+    --accent:#7FA7E8; --pos:#63BC97; --neg:#E08A76; --warn:#D3AC55;
+    --bar-pos:#3F8A69; --bar-neg:#A85843;
+  }
+
+  body { background:var(--paper); color:var(--ink);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size:15px; line-height:1.6; }
+  .wrap { max-width:1000px; margin:0 auto; padding:48px 24px 96px; display:flex;
+    flex-direction:column; gap:44px; }
+  p, li { max-width:68ch; }
+  h1, h2, h3 { font-family:Newsreader, Georgia, serif; font-weight:500;
+    text-wrap:balance; margin:0; letter-spacing:-0.01em; }
+  h1 { font-size:41px; line-height:1.12; }
+  h2 { font-size:26px; line-height:1.2; }
+  h3 { font-size:18px; font-weight:600; }
+  .eyebrow { font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:11px;
+    letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); }
+  .lede { font-size:17px; color:var(--muted); max-width:64ch; }
+  section { display:flex; flex-direction:column; gap:16px; }
+  a { color:var(--accent); }
+
+  header { display:flex; flex-direction:column; gap:14px;
+    border-bottom:1px solid var(--rule); padding-bottom:28px; }
+
+  /* fixed protocol: a definition strip, not cards */
+  .protocol { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
+    gap:1px; background:var(--rule); border:1px solid var(--rule); }
+  .protocol div { background:var(--surface); padding:12px 14px; display:flex;
+    flex-direction:column; gap:3px; }
+  .protocol dt, .protocol .k { font-family:"IBM Plex Mono", monospace; font-size:10.5px;
+    letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
+  .protocol .v { font-family:"IBM Plex Mono", monospace; font-size:15px; font-weight:500;
+    font-variant-numeric:tabular-nums; }
+
+  /* headline findings */
+  .head-list { display:flex; flex-direction:column; gap:1px; background:var(--rule);
+    border:1px solid var(--rule); }
+  .head-row { background:var(--surface); display:grid;
+    grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:18px;
+    padding:14px 16px; }
+  .head-row .what { display:flex; flex-direction:column; gap:2px; }
+  .head-row .what b { font-weight:600; }
+  .head-row .what span { color:var(--muted); font-size:13.5px; }
+  .head-row .num { font-family:"IBM Plex Mono", monospace; font-variant-numeric:tabular-nums;
+    font-size:19px; font-weight:500; text-align:right; white-space:nowrap; }
+  .head-row .lift { font-family:"IBM Plex Mono", monospace; font-size:13px;
+    font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap;
+    padding:2px 8px; border-radius:2px; }
+  .lift.up { color:var(--pos); background:color-mix(in srgb, var(--bar-pos) 14%, transparent); }
+  .lift.flat { color:var(--muted); background:var(--shade); }
+
+  .tablewrap { overflow-x:auto; border:1px solid var(--rule); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { text-align:left; padding:9px 14px; border-bottom:1px solid var(--rule);
+    white-space:nowrap; }
+  th { font-family:"IBM Plex Mono", monospace; font-size:10.5px; letter-spacing:0.09em;
+    text-transform:uppercase; color:var(--muted); font-weight:400;
+    border-bottom:1px solid var(--ink); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.n { font-family:"IBM Plex Mono", monospace; font-variant-numeric:tabular-nums;
+    text-align:right; }
+  td.desc { white-space:normal; min-width:230px; color:var(--muted); }
+  tr.ref td { background:var(--shade); }
+  tr.ref td.name { font-weight:600; }
+  td.name { font-family:"IBM Plex Mono", monospace; font-size:13px; }
+
+  /* delta bar: centre line, positive right, negative left */
+  .bar { display:flex; width:132px; height:9px; background:var(--shade); }
+  .bar i { display:block; height:100%; }
+  .bar .l { margin-left:auto; background:var(--bar-neg); }
+  .bar .r { background:var(--bar-pos); }
+  .barcell { width:132px; padding-right:14px; }
+  .half { width:50%; display:flex; }
+  .half.left { justify-content:flex-end; }
+
+  blockquote { margin:0; padding:14px 18px; background:var(--surface);
+    border-left:2px solid var(--accent); color:var(--ink); max-width:68ch; }
+  code { font-family:"IBM Plex Mono", monospace; font-size:13px; background:var(--shade);
+    padding:1px 5px; }
+  .note { color:var(--muted); font-size:13px; max-width:68ch; }
+  ul, ol { padding-left:20px; display:flex; flex-direction:column; gap:7px; margin:0; }
+  footer { border-top:1px solid var(--rule); padding-top:20px; color:var(--muted);
+    font-size:13px; }
+  @media (max-width:620px) {
+    h1 { font-size:32px; } .head-row { grid-template-columns:1fr auto; }
+    .head-row .lift { grid-column:2; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ZINC-250k &middot; embedding-space diffusion &middot; September 2026</div>
+    <h1>What actually moves validity at a fixed budget</h1>
+    <p class="lede">Sixty-nine training runs at one model size and one token budget, each
+    sampled and scored, ranked by the only metric that separates them: how many distinct
+    valid molecules come out of 10,000 attempts. Validation loss does not separate them at
+    all, and saying so is part of the result.</p>
+  </header>
+
+  <section>
+    <div class="eyebrow">held constant in every row below</div>
+    <div class="protocol">
+      <div><span class="k">parameters</span><span class="v">5.04 M</span></div>
+      <div><span class="k">shape</span><span class="v">256 &times; 4 blocks</span></div>
+      <div><span class="k">latent width</span><span class="v">32</span></div>
+      <div><span class="k">batch</span><span class="v">1024</span></div>
+      <div><span class="k">steps</span><span class="v">17 600</span></div>
+      <div><span class="k">tokens / param</span><span class="v">80</span></div>
+      <div><span class="k">precision</span><span class="v">bf16</span></div>
+      <div><span class="k">attempts scored</span><span class="v">10 000</span></div>
+    </div>
+    <p class="note">Fixing size and budget is what makes the study cheap: one run is five
+    minutes on one H100, so a wave of twelve variants costs about twenty minutes. Validity
+    is measured by rdkit on 10,000 sampled strings, which gives a binomial 95% interval of
+    half a point, and that interval is badly misleading: seed-to-seed spread within one
+    configuration reached eleven points for the best training change and nineteen for one
+    of its combinations, so single-seed rows are read as suggestions and nothing here is
+    called an effect without a second seed. Validation loss is not used to rank anything
+    here: it saturates between 0.75 and 0.80 for 5M, 17M and 45M parameters alike, while
+    their validity differs by a factor of three.</p>
+  </section>
+
+  <section>
+    <h2>The changes worth keeping</h2>
+    <div class="head-list" id="headline"></div>
+    <p class="note">The two are independent, one in decoding and one in training, and
+    they compose: together they return about 3800 distinct valid molecules per 10,000
+    attempts against 617 for the original setup, with uniqueness above 99% and a length
+    distribution that still looks like the corpus. Three of the four other apparent winners
+    did not survive a second seed, which is the other half of this report.</p>
+  </section>
+
+  <section>
+    <h2>Where the timesteps come from</h2>
+    <p>The original objective draws the diffusion time uniformly on the unit interval.
+    Drawing it from a logit-normal instead, so most of the mass sits at intermediate noise
+    and both extremes are rare, is the largest training-side effect in the study. It is
+    also a narrow peak rather than a direction: mean 0 with standard deviation 1 is the
+    best setting tried, and moving the centre either way, or widening it, costs three to
+    nine points. Shifting it towards the data end, where the task is easy, is the worst of
+    them, which rules out "fewer easy steps" as the explanation and points at the middle
+    of the schedule as where the score is worth learning.</p>
+    <div class="tablewrap"><table id="t-time"></table></div>
+    <p class="note">Argmax decoding at 300 solver steps in every row, against the same
+    reference. The last row is the one to argue about: doubling the budget under this
+    timestep distribution costs six points, where the same doubling under uniform
+    timesteps gained four.</p>
+  </section>
+
+  <section>
+    <h2>One knob at a time</h2>
+    <p>Fifteen single-knob variants against the same reference, all decoded with argmax at
+    300 solver steps, one seed each. Read the small positives as candidates, not results:
+    of the four that were followed up with a second seed, three did not survive. The
+    masking rows are the
+    most informative negatives: padding is the only signal on a fixed canvas that tells
+    the model where a molecule ends, so taking it out of the loss or out of attention
+    removes termination supervision and generation collapses.</p>
+    <div class="tablewrap"><table id="t-screen"></table></div>
+  </section>
+
+  <section>
+    <h2>Shaping the loss</h2>
+    <p>Both terms of this objective, the token cross-entropy and the reconstruction error,
+    are gated to run only on low-noise states, and every row here is argmax at 300 solver
+    steps. That gate is the reason min-SNR weighting
+    fails here: capping the weight of high signal-to-noise timesteps removes most of the
+    token-level supervision. Raising the gate instead, so the terms see only the cleanest
+    states, moves in the helpful direction.</p>
+    <div class="tablewrap"><table id="t-loss"></table></div>
+  </section>
+
+  <section>
+    <h2>Turning a trajectory into a string</h2>
+    <p>Roughly nine in ten invalid outputs fail on brackets or ring digits rather than
+    chemistry, and both are decidable from the string alone while decoding. Repairing them
+    costs no training and is the single largest gain measured anywhere in this study.
+    Yield is per attempt, not per non-empty string, because two of the modes can return
+    nothing; length is over valid molecules only, against a corpus mean of 44.3 characters.</p>
+    <div class="tablewrap"><table id="t-decode"></table></div>
+    <p class="note">Closing what is open is the honest default: it preserves the length
+    distribution and doubles the yield. The mixed mode chooses per string and gives almost
+    four times the molecules, but the average one is 26 characters, so that number has to
+    be quoted next to its length.</p>
+    <h3>Both repair modes on the checkpoints that matter</h3>
+    <p>Seven checkpoints decoded three ways, 100 solver steps throughout. Closing is the
+    column to quote when the length distribution has to hold: on the cross-entropy
+    configuration it keeps uniqueness at or above 99.5% and lands within six characters of
+    the corpus mean of 44.3, on both seeds.</p>
+    <div class="tablewrap"><table id="t-close"></table></div>
+  </section>
+
+  <section>
+    <h2>Both changes, on the same twelve checkpoints</h2>
+    <p>Each checkpoint decoded twice, argmax and mixed repair, 100 solver steps both
+    times. Unique valid is the count of distinct molecules per 10,000 attempts, which is
+    what a generative model is actually judged on: the original setup returns 617.</p>
+    <div class="tablewrap"><table id="t-both"></table></div>
+    <p class="note">The ranking is not the same under the two decoders. The
+    sphere-corruption run is sixth on argmax and first once repaired, so a screening study
+    that ranks on argmax alone can pick the wrong winner.</p>
+  </section>
+
+  <section>
+    <h2>The solver</h2>
+    <p>Sampling settings were swept on one fixed checkpoint. The stochastic sampler at
+    full noise is already the best of them, the deterministic limit is a point and a half
+    worse, and the step count barely matters for the reference while the logit-normal
+    winner actually prefers the cheap end, 15.29% at 100 steps against 13.55% at 300. So
+    generation runs at 100 steps where the config asked for 300.</p>
+    <div class="tablewrap"><table id="t-solver"></table></div>
+    <h3>Where the solver puts its steps</h3>
+    <p>The grid was uniform in t. Redistributing the same hundred steps, keeping both
+    endpoints, costs nothing to try, and the answer is that the original grid was already
+    the right one.</p>
+    <div class="tablewrap"><table id="t-grid"></table></div>
+  </section>
+
+  <section>
+    <h2>Negative results, and why they are worth reporting</h2>
+    <ul id="negatives"></ul>
+  </section>
+
+  <section>
+    <h2>Scale, held back deliberately</h2>
+    <p>Size and budget were frozen for this study, but the two curves that justify the
+    choice are worth recording. Validity keeps climbing with budget and with size, and
+    parameters buy more than passes: at a fixed 160 tokens per parameter, going from 5M to
+    45M is worth twelve points, while quadrupling the budget on the small model is worth
+    seven. That last curve is not universal, though. Under logit-normal timesteps the same
+    doubling from 80 to 160 tokens per parameter goes the other way, 13.55% down to 7.23%.
+    Eighty and 161 passes over a 224k-molecule corpus are both a great deal of repetition,
+    and the mid-noise-heavy schedule reaches the point where it hurts sooner.</p>
+    <div class="tablewrap"><table id="t-scale"></table></div>
+  </section>
+
+  <section>
+    <h2>What a second seed does to a screening study</h2>
+    <p>Every row here is 100 solver steps and argmax decoding, so seeds are directly
+    comparable. The reference is stable, a quarter of a point between its two seeds. The
+    logit-normal configuration is not: four seeds give 15.29%, 14.20%, 7.18% and 18.08%.
+    Its mean is 2.4 times the reference and its own spread is a factor of two and a half.
+    So the timestep change raises the mean a lot and raises the variance with it, and that
+    belongs in a paper as a property of the method rather than hidden behind a
+    best-of-four number.</p>
+    <p>The same variance is what dissolved the study's most attractive single number.
+    Weighting padding at 0.6 read 26.15% on one seed and 7.46% on the next; the
+    cross-entropy weight read 18.82% and 13.99%. At this size one seed resolves nothing
+    below roughly ten points, twenty times wider than the half-point binomial interval
+    that 10,000 samples suggests. Of four winners found at one seed, three dissolved at
+    two.</p>
+    <div class="tablewrap"><table id="t-seeds"></table></div>
+  </section>
+
+  <section>
+    <h2>What I would run next</h2>
+    <ol id="next"></ol>
+  </section>
+
+  <footer>
+    <p>Protocol: ZINC-250k, 224k training molecules, a 386-token SMILES tokenizer, sequence
+    canvas 64. Every run is one H100, bf16, batch 1024, 17,600 optimizer steps, and is
+    sampled for 10,000 molecules and scored with rdkit. Validity, uniqueness, novelty and
+    internal diversity come from the same scorer for every row; novelty is above 99.7%
+    everywhere and is therefore not tabulated. Numbers in this page are single runs unless
+    a seed is named.</p>
+  </footer>
+</div>
+
+<script>
+const REF = 6.19;  // r_base80: uniform timesteps, grammar off, seed 42
+
+const HEADLINE = [
+  ["Grammar repair at decoding", "brackets and ring digits fixed while the string is written, no training", "42.2%", "7.6&times;"],
+  ["Logit-normal timesteps", "t drawn from a logit-normal instead of uniformly, mean of four seeds", "13.7%", "2.4&times;"],
+  ["Both, length distribution intact", "about 3800 distinct valid molecules per 10,000 attempts, two seeds", "38.4%", "6.2&times;"],
+];
+
+const NEXT = [
+  ["Self-conditioning", "Feed the previous x0 estimate back as a second input to the denoiser. It is the one well-established trick from the text-diffusion literature not yet tried here, it costs one extra forward pass on half the steps, and it attacks the same weakness the timestep result exposed: the score in the middle of the schedule."],
+  ["Valence-aware decoding", "After grammar repair, 92% of what still fails is valence and aromaticity. Both are checkable while decoding, the same way brackets and ring digits now are, and the repair machinery is already in place."],
+  ["A length head", "The canvas is filled blindly and the model has to learn termination from padding alone. Predicting the length first, then decoding into that many positions, would remove the failure mode that both masking experiments made visible."],
+  ["Three seeds as the unit of measurement", "The screening protocol needs changing, not just extending: one run per configuration at 5M parameters cannot resolve anything under eight points. Three seeds per row costs fifteen minutes and would have prevented three of the four false winners in this study."],
+  ["Where the variance comes from", "The reference is stable and the logit-normal runs are not, so the instability is a property of that timestep distribution. Worth one careful run set: does the spread narrow with more parameters, a longer warmup, or a lower peak learning rate?"],
+  ["The winner at scale", "Only after the above: the timestep change and grammar repair re-measured at 45M parameters, where the reference already reaches 21.7%, with three seeds."],
+];
+
+const SEEDS = [
+  ["reference, uniform timesteps", "42", 5.55, 42.23],
+  ["reference, uniform timesteps", "43", 5.78, 44.00],
+  ["logit-normal timesteps", "42", 15.29, 60.29],
+  ["logit-normal timesteps", "43", 14.20, 47.22],
+  ["logit-normal timesteps", "44", 7.18, 30.88],
+  ["logit-normal timesteps", "45", 18.08, 68.00],
+  ["and padding weighted 0.6", "42", 26.15, 59.47],
+  ["and padding weighted 0.6", "43", 7.46, 34.04],
+  ["and cross-entropy weight 3", "42", 18.82, 60.29],
+  ["and cross-entropy weight 3", "43", 13.99, 60.38],
+];
+
+const CLOSE = [
+  ["r_tl0_padw06, seed 42", 26.15, 45.72, 59.47, 94.7, 32.4, 4330],
+  ["r_tl0_ce3, seed 42",    18.82, 40.59, 60.29, 99.5, 50.2, 4039],
+  ["r_tl0_ce3, seed 43",    13.99, 36.30, 60.38, 100.0, 40.4, 3629],
+  ["r_tl0_sphere, seed 42", 12.25, 30.62, 63.08, 99.9, 37.7, 3059],
+  ["r_tl0_padw06_ce3",      12.54, 26.65, 58.55, 99.8, 36.5, 2661],
+  ["r_tl0_padw06, seed 43",  7.46, 17.16, 34.04, 100.0, 42.5, 1716],
+  ["r_base80, the reference", 5.55, 13.07, 42.23, 100.0, 47.6, 1307, true],
+];
+
+const BOTH = [
+  ["r_tl0_sphere",  12.25, 63.08, 5615, 29.8],
+  ["r_tl0_ce3",     16.62, 60.29, 5442, 34.9],
+  ["r_tl0_lr6e3",   14.70, 59.77, 5304, 32.7],
+  ["r_tlp05",       10.95, 52.04, 4757, 27.9],
+  ["r_tl0_emb16",   13.73, 50.74, 4611, 30.8],
+  ["r_tlm05",        7.85, 50.57, 4414, 35.3],
+  ["r_tlm05_emb16",  9.19, 47.84, 4127, 34.3],
+  ["r_tl0_s43",     13.71, 47.22, 3846, 28.8],
+  ["r_tls15",        5.85, 44.50, 3451, 32.1],
+  ["r_base80",       6.19, 42.23, 3175, 31.8, true],
+  ["r_tls07",       12.50, 37.13, 2871, 29.4],
+  ["r_tl0_bud160",   7.23, 35.45, 2851, 35.3],
+];
+
+const TIME = [
+  ["r_tl0_ce3",     "logit-normal, cross-entropy weight 3.0", 16.62],
+  ["r_tl0_lr6e3",   "logit-normal, learning rate 6e-3", 14.70],
+  ["r_tl0_emb16",   "logit-normal, latent width 16", 13.73],
+  ["r_tl0_s43",     "logit-normal, second seed", 13.71],
+  ["r_tlogit0",     "logit-normal, mean 0, std 1", 13.55],
+  ["r_tls07",       "logit-normal, std 0.7", 12.50],
+  ["r_tl0_sphere",  "logit-normal, sphere corruption", 12.25],
+  ["r_tlp05",       "logit-normal centred at +0.5", 10.95],
+  ["r_tlm05_emb16", "centred at -0.5, latent width 16", 9.19],
+  ["r_tlm05",       "logit-normal centred at -0.5", 7.85],
+  ["r_tl0_bud160",  "logit-normal, twice the budget (35,200 steps)", 7.23],
+  ["r_base80",      "uniform, the reference", 6.19, true],
+  ["r_tls15",       "logit-normal, std 1.5", 5.85],
+  ["r_tlogit1",     "logit-normal centred at +1.0", 4.95],
+];
+
+const GRID = [
+  ["uniform, the original", "&mdash;", 15.29, true],
+  ["dense at both ends", "2", 15.09],
+  ["dense in the middle", "2", 12.48],
+  ["dense towards data", "2", 12.39],
+  ["dense towards noise", "2", 10.38],
+  ["dense towards data", "3", 8.32],
+  ["dense in the middle", "3", 8.23],
+];
+
+const SCREEN = [
+  ["r_tlogit0",    "diffusion time drawn logit-normal instead of uniform", 13.55],
+  ["r_emb16",      "latent width 16 instead of 32", 6.89],
+  ["r_ce3",        "cross-entropy weight 3.0", 6.82],
+  ["r_sphere",     "x0 corruption drawn on the sphere", 5.88],
+  ["r_emb64",      "latent width 64", 5.75],
+  ["r_base80",     "the reference: one knob per row, everything else identical", 6.19, true],
+  ["r_lr6e3",      "learning rate 6e-3 instead of 3e-4", 5.13],
+  ["r_tlogit1",    "logit-normal centred at +1, towards the data end", 4.95],
+  ["r_lr1e3",      "learning rate 1e-3", 3.27],
+  ["r_maskloss",   "padding removed from the noise loss", 1.58],
+  ["r_embrms_n50", "unit-norm embeddings, corruption 0.5", 1.58],
+  ["r_embrms",     "unit-norm embeddings", 1.40],
+  ["r_mixup",      "x0 corrupted by mixing token embeddings", 0.44],
+  ["r_regimex",    "predict x0 instead of the noise", 0.35],
+  ["r_maskattn",   "padding removed from attention", 0.05],
+  ["r_laplace",    "Laplace x0 corruption", 0.00],
+];
+
+const LOSS = [
+  ["r_thr90",   "cross-entropy gate raised from alpha 0.8 to 0.9", 7.33],
+  ["r_lsmooth", "label smoothing 0.05", 6.93],
+  ["r_padw06",  "padding weighted 0.6 in the noise loss", 6.73],
+  ["r_ce2",     "cross-entropy weight 2.0", 6.52],
+  ["r_ce05",    "cross-entropy weight 0.5", 6.08],
+  ["r_base80",  "the reference: unweighted padding, cross-entropy weight 1.0", 6.19, true],
+  ["r_padw03",  "padding weighted 0.3", 5.06],
+  ["r_minsnr5", "min-SNR weighting, gamma 5", 0.79],
+  ["r_minsnr1", "min-SNR weighting, gamma 1", 0.47],
+];
+
+const DECODE = [
+  ["argmax",        "the original readout, one argmax per position", 968, 961, 37.3, true],
+  ["grammar close", "append the missing ring digit and brackets", 2070, 2070, 39.9],
+  ["grammar mixed", "close or trim, whichever the string needs", 4419, 3513, 25.8],
+  ["grammar trim",  "cut back to the last balanced position", 5241, 3067, 18.8],
+  ["argmax + clamp","x0 estimate snapped to the nearest embedding", 43, 37, 11.0],
+  ["trim + clamp",  "both at once", 859, 369, 8.8],
+];
+
+const SOLVER = [
+  ["sigma 1.0, stochastic", "9.67%", "9.69%", "10.00%", true],
+  ["sigma 0.5", "9.34%", "8.99%", "8.76%"],
+  ["sigma 0.0, probability flow", "8.69%", "8.29%", "8.35%"],
+];
+
+const SCALE = [
+  ["5.0 M", "40", "2.65%"],
+  ["5.0 M", "80", "5.28%"],
+  ["5.0 M", "160", "9.69%"],
+  ["5.0 M", "320", "12.85%"],
+  ["17 M", "160", "11.58%"],
+  ["45 M", "160", "21.74%"],
+];
+
+const NEGATIVES = [
+  ["Weight averaging", "4.40% falls to 0.24% and the averaged model stops terminating, at 186 characters against the corpus 44. The averaged checkpoint is legitimate: its largest per-tensor difference from the final weights is 2%, the median 0.6%, no NaNs. A perturbation that small destroying generation says the embedding table and the readout are tuned to each other tightly enough that a trajectory average breaks the pairing."],
+  ["Random SMILES traversals", "Four times the distinct strings costs half the validity at a fixed step count, 2.62% and 2.65% on two seeds. Each string is seen a quarter as often, and at this budget repetition is what the model needs."],
+  ["min-SNR loss weighting", "0.47% at gamma 1. The objective already routes its token-level supervision through high signal-to-noise timesteps by gating on alpha, so capping their weight removes it."],
+  ["Masking padding", "0.05% with padding out of attention, 1.58% with it out of the loss. On a fixed canvas padding is the only termination signal, and the model needs it more than it needs the freed capacity."],
+  ["Clamping the x0 estimate", "The Diffusion-LM trick is harmful at full strength, 0.43%, and neutral at 0.1. The trajectory collapses onto one token early and the samples become long and repetitive."],
+  ["Predicting x0 instead of the noise", "0.35%. The reconstruction and cross-entropy terms are built around the noise parameterisation and the alpha gate; changing the target without redesigning them loses the coupling."],
+];
+function bar(delta, scale) {
+  const w = Math.min(100, Math.abs(delta) / scale * 100);
+  const l = delta < 0 ? `<i class="l" style="width:${w}%"></i>` : "";
+  const r = delta > 0 ? `<i class="r" style="width:${w}%"></i>` : "";
+  return `<div class="bar"><div class="half left">${l}</div><div class="half">${r}</div></div>`;
+}
+function table(el, cols, rows, opts) {
+  opts = opts || {};
+  const head = cols.map(c => `<th${c.n ? ' style="text-align:right"' : ""}>${c.h}</th>`).join("");
+  const body = rows.map(r => {
+    const cells = cols.map(c => {
+      const v = r[c.k];
+      if (c.k === "bar") return `<td class="barcell">${v === null ? "" : bar(v, opts.scale || 10)}</td>`;
+      const cls = c.n ? "n" : (c.k === "name" ? "name" : (c.desc ? "desc" : ""));
+      return `<td class="${cls}">${v === undefined || v === null ? "" : v}</td>`;
+    }).join("");
+    return `<tr class="${r.ref ? "ref" : ""}">${cells}</tr>`;
+  }).join("");
+  document.getElementById(el).innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+}
+
+const fmt = v => (typeof v === "number" ? v.toFixed(2) + "%" : v);
+const dl = v => (v === null ? "" : (v > 0 ? "+" : "") + v.toFixed(2));
+
+function knobTable(el, rows, ref) {
+  table(el,
+    [{h:"run", k:"name"}, {h:"what changed", k:"desc", desc:true},
+     {h:"validity", k:"v", n:true}, {h:"delta", k:"d", n:true}, {h:"", k:"bar"}],
+    rows.map(r => ({
+      name: r[0], desc: r[1], v: fmt(r[2]),
+      d: r[3] ? "&mdash;" : dl(r[2] - ref),
+      bar: r[3] ? null : +(r[2] - ref).toFixed(2), ref: !!r[3],
+    })), {scale: 8.5});
+}
+document.getElementById("headline").innerHTML = HEADLINE.map(([h, sub, v, lift]) => `
+  <div class="head-row">
+    <div class="what"><b>${h}</b><span>${sub}</span></div>
+    <div class="num">${v}</div>
+    <div class="lift up">${lift}</div>
+  </div>`).join("");
+
+table("t-both",
+  [{h:"run", k:"name"}, {h:"argmax", k:"a", n:true}, {h:"repaired", k:"b", n:true},
+   {h:"unique valid / 10k", k:"u", n:true}, {h:"mean length", k:"l", n:true}],
+  BOTH.map(r => ({name: r[0], a: fmt(r[1]), b: fmt(r[2]), u: r[3].toLocaleString(),
+    l: r[4].toFixed(1), ref: !!r[5]})));
+table("t-close",
+  [{h:"run", k:"name"}, {h:"argmax", k:"a", n:true}, {h:"closed", k:"c", n:true},
+   {h:"mixed", k:"m", n:true}, {h:"uniqueness", k:"u", n:true},
+   {h:"mean length", k:"l", n:true}, {h:"unique valid / 10k", k:"n", n:true}],
+  CLOSE.map(r => ({name: r[0], a: fmt(r[1]), c: fmt(r[2]), m: fmt(r[3]),
+    u: r[4].toFixed(1) + "%", l: r[5].toFixed(1), n: r[6].toLocaleString(),
+    ref: !!r[7]})));
+table("t-seeds",
+  [{h:"configuration", k:"name"}, {h:"seed", k:"s", n:true},
+   {h:"argmax", k:"a", n:true}, {h:"repaired (mixed)", k:"m", n:true}],
+  SEEDS.map(r => ({name: r[0], s: r[1], a: fmt(r[2]),
+    m: r[3] === null ? "not run" : fmt(r[3]), ref: r[0].startsWith("reference")})));
+knobTable("t-time", TIME, REF);
+table("t-grid",
+  [{h:"grid", k:"name"}, {h:"power", k:"p", n:true}, {h:"validity", k:"v", n:true},
+   {h:"delta", k:"d", n:true}],
+  GRID.map(r => ({name: r[0], p: r[1], v: fmt(r[2]),
+    d: r[3] ? "&mdash;" : dl(r[2] - 15.29), ref: !!r[3]})));
+knobTable("t-screen", SCREEN, REF);
+knobTable("t-loss", LOSS, REF);
+
+table("t-decode",
+  [{h:"decoding", k:"name"}, {h:"rule", k:"desc", desc:true},
+   {h:"valid / 10k", k:"v", n:true}, {h:"unique valid", k:"u", n:true},
+   {h:"mean length", k:"l", n:true}, {h:"vs argmax", k:"x", n:true}],
+  DECODE.map(r => ({name: r[0], desc: r[1], v: r[2].toLocaleString(),
+    u: r[3].toLocaleString(), l: r[4].toFixed(1),
+    x: r[5] ? "&mdash;" : (r[3] / 961).toFixed(1) + "&times;", ref: !!r[5]})));
+
+table("t-solver",
+  [{h:"noise in the reverse SDE", k:"name"}, {h:"100 steps", k:"a", n:true},
+   {h:"300 steps", k:"b", n:true}, {h:"1000 steps", k:"c", n:true}],
+  SOLVER.map(r => ({name: r[0], a: r[1], b: r[2], c: r[3], ref: !!r[4]})));
+
+table("t-scale",
+  [{h:"parameters", k:"name"}, {h:"tokens / param", k:"t", n:true},
+   {h:"validity", k:"v", n:true}],
+  SCALE.map(r => ({name: r[0], t: r[1], v: r[2]})));
+
+document.getElementById("negatives").innerHTML = NEGATIVES
+  .map(([h, b]) => `<li><b>${h}.</b> ${b}</li>`).join("");
+document.getElementById("next").innerHTML = NEXT
+  .map(([h, b]) => `<li><b>${h}.</b> ${b}</li>`).join("");
+</script>
