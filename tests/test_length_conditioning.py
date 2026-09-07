@@ -42,3 +42,8 @@ def test_an_empty_prior_is_reported():
 
 def test_the_prior_is_off_by_default():
     assert SamplingParams().length_prior is None
+
+
+def test_the_floor_is_off_by_default():
+    """It was on whenever a prior was set, which invalidated a whole wave of runs."""
+    assert SamplingParams(length_prior=np.array([10])).length_floor is False

@@ -33,6 +33,10 @@ generate:
                                  # sequences. A path to the tokenized split (or one
                                  # *attn_mask*.npy shard) draws the length from the corpus
                                  # instead and pins the rest of the canvas to padding
+  length_floor: false            # true also forbids stopping before the drawn length.
+                                 # Measured at 0% usable and 60-atom strings: the tail
+                                 # fills with whatever token ranks first among the
+                                 # non-stop candidates. Kept only to reproduce that
   strict_decode: false           # true replaces the bracket and ring-digit counting with
                                  # the full connectivity check: no ring closed onto its
                                  # own atom, no closure duplicating an existing bond, no

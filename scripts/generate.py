@@ -103,6 +103,7 @@ def main(cfg: DictConfig) -> None:
         on_disallowed=str(gen.get("on_disallowed", "next_best")),
         strict=bool(gen.get("strict_decode", False)),
         length_prior=_length_prior(gen),
+        length_floor=bool(gen.get("length_floor", False)),
         time_grid=str(gen.get("time_grid", "uniform")),
         time_grid_power=float(gen.get("time_grid_power", 2.0)),
     )

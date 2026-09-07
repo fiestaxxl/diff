@@ -13,6 +13,12 @@ overwritten with their exact conditional value, alpha(t) * pad_embedding + beta(
 which is the standard replacement method for conditional diffusion. The model then only
 has to fill the canvas it is given.
 
+That much is measured to be nearly free and nearly useless on its own: the model still
+ends the molecule early, and pinning the tail changes validity by a point. Forcing it to
+fill the length instead, with ``length_floor``, is actively destructive, so the floor is
+off by default. Making the model actually use the length needs it as a training input,
+which is ``model.length_conditioning``.
+
 The rest of the scheme is carried over unchanged from the old code
 (``generate.py::generate`` and the sampling block in
 ``ConditionalGaussianDenoiserTrainerLite.evaluate``): p_simple -> Euler-Maruyama
@@ -49,6 +55,7 @@ class SamplingParams:
     on_disallowed: str = "next_best"  # what to do with an atom outside that set
     strict: bool = False          # full connectivity check instead of bracket counting
     length_prior: Optional[Any] = None  # 1-d array of token lengths to draw from
+    length_floor: bool = False    # also forbid stopping before the drawn length
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
 
@@ -176,9 +183,12 @@ def sample_smiles(
             ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
             smiles.extend(tokenizer.decode_batch(ids, special_decode=True))
         else:
-            # the drawn length is a floor as well as a ceiling: without it the model
-            # simply ends the molecule early and the conditioning does nothing
-            smiles.extend(decoder.decode(logits.detach(), min_length=drawn_lengths))
+            # The floor is off by default and should stay off: forcing content into
+            # every position up to the drawn length fills the tail with whatever token
+            # ranks first among the non-stop candidates, which measured 0% usable and
+            # 60-atom strings. A length-conditioned model is supposed to stop on its own.
+            floors = drawn_lengths if params.length_floor else None
+            smiles.extend(decoder.decode(logits.detach(), min_length=floors))
         done += b
     return smiles
 
