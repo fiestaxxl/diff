@@ -494,3 +494,55 @@ With the reference at 5.55% and 5.78% on its two seeds, and the timestep change 
 of two within the same configuration. The reference also prefers 300 solver steps while
 the logit-normal runs prefer 100, which is one more reason to state the step count next to
 every number.
+
+## Second seeds, and what survives them
+
+Every row here is 100 solver steps. The point of this wave was to put a second seed under
+each apparent winner from the earlier ones.
+
+| run | argmax | repaired (mixed) | unique valid (mixed) |
+|---|---|---|---|
+| r_tl0_padw06, seed 42 | 26.15% | 59.47% | 5204 |
+| r_tl0_padw06, seed 43 | 7.46% | 34.04% | 2771 |
+| r_tl0_padw03 | 23.32% | 63.89% | 5910 |
+| r_tl0_padw08 | 17.58% | 47.65% | 4317 |
+| r_padw06 without logit-normal | 6.72% | 48.42% | 3574 |
+| r_tl0_ce3, seed 42 | 18.82% | 60.29% | 5442 |
+| r_tl0_ce3, seed 43 | 13.99% | 60.38% | 5730 |
+| r_tl0_sphere, seed 43 | 21.58% | 66.02% | 5354 |
+| r_tl0_s45, fourth seed of the plain winner | 18.08% | 68.00% | 5406 |
+| reference, seeds 42 and 43 | 5.55% / 5.78% | 42.23% / 44.00% | 3175 / 3357 |
+
+This wave costs the study its most attractive single number. Weighting padding at 0.6 read
+26.15% on seed 42 and 7.46% on seed 43, so the top of the argmax table was a seed
+artifact. The same is true, more mildly, of the cross-entropy weight (18.82% and 13.99%)
+and of sphere corruption (12.25% at 300 steps, 21.58% at 100). Padding weight without the
+timestep change reads 6.72% against a 5.55-5.78% reference, which is inside the band.
+
+What does survive is the timestep distribution itself, now on four seeds: 15.29%, 14.20%,
+7.18% and 18.08%, mean 13.7% against a reference mean of 5.7%, so a factor of 2.4 with a
+range of two and a half between its own seeds. And the repair decoder survives everything:
+every logit-normal checkpoint lands between 58% and 68% repaired, against 42-44% for the
+reference, over roughly thirty checkpoints with no exception.
+
+The methodological lesson is worth as much as the numbers. At this size a single seed
+resolves nothing below about eight points, which is far wider than the binomial interval
+of half a point that the sample count suggests. Screening at one seed found four winners;
+three of them dissolved on the second seed.
+
+## The length-preserving decoder on the best configurations
+
+| run | argmax | closed | uniqueness | mean length | unique valid |
+|---|---|---|---|---|---|
+| r_tl0_padw06, seed 42 | 26.15% | 45.72% | 94.7% | 32.4 | 4330 |
+| r_tl0_ce3, seed 42 | 18.82% | 40.59% | 99.5% | 50.2 | 4039 |
+| r_tl0_ce3, seed 43 | 13.99% | 36.30% | 100.0% | 40.4 | 3629 |
+| r_tl0_padw06_ce3 | 12.54% | 26.65% | 99.8% | 36.5 | 2661 |
+| r_tl0_padw06, seed 43 | 7.46% | 17.16% | 100.0% | 42.5 | 1716 |
+| reference | 5.55% | 13.07% | 100.0% | 47.6 | 1307 |
+
+Both seeds of the cross-entropy configuration land at 3629 and 4039 distinct valid
+molecules per 10,000 attempts with uniqueness at or above 99.5% and lengths of 40 and 50
+against the corpus 44. That is the number to quote: about 3800 on average against 1307 for
+the reference decoded the same way, and against 617 for the original setup at its own
+default settings.
