@@ -190,31 +190,32 @@ across a run.
 
 ## Decoding, measured on one fixed checkpoint
 
-No training involved: the same 5.0M model trained to 160 t/p (9.69% validity with the
-plain decoder), 10,000 molecules each, 100 solver steps.
+No training involved: the same 5.0M model trained to 160 tokens per parameter, 10,000
+attempts each, 100 solver steps. Yield is counted per attempt, not per non-empty string,
+because the repair modes can return nothing at all; length is measured over the valid
+molecules and the corpus reference is 44.3 characters.
 
-| decoding | validity | uniqueness | mean length | unique valid |
-|---|---|---|---|---|
-| argmax (the original) | 9.67% | 99.5% | 43.6 | 960 |
-| grammar repair, close what is open | **20.70%** | 100% | 45.0 | 2070 |
-| grammar repair, trim what is open | **62.91%** | 58.5% | 25.6 | 3066 |
-| argmax + clamping the x0 estimate | 0.43% | 86.0% | 134.0 | 37 |
-| grammar trim + clamping | 11.52% | 43.0% | 83.3 | 369 |
+| decoding | valid | unique valid | mean length |
+|---|---|---|---|
+| argmax (the original) | 968 | 961 | 37.3 |
+| grammar repair, close what is open | 2070 | 2070 | 39.9 |
+| grammar repair, mixed | **4419** | **3513** | 25.8 |
+| grammar repair, trim what is open | 5241 | 3067 | 18.8 |
+| argmax, x0 estimate clamped | 43 | 37 | 11.0 |
+| trim, x0 estimate clamped | 859 | 369 | 8.8 |
 
-The corpus median length is 44 characters, which is the reference for the third column.
-
-Both repair modes remove parenthesis failures entirely and cut ring failures to under a
-tenth of what they were, so the remaining invalid strings are 91% valence and
-aromaticity errors. The two modes differ in what they do with a molecule that ends with
-something open: trimming cuts back to the last balanced point, which triples the number
-of unique valid molecules but produces strings half the corpus length, so the
-distribution moves; closing appends the missing ring digit and brackets, which keeps the
-length distribution and uniqueness intact and still doubles validity. Closing is the
-honest default, trimming is the number to quote only next to the length it produces.
+Repair removes parenthesis failures entirely and cuts ring failures to under a tenth,
+so 92% of what still fails is valence and aromaticity. The three modes differ in what
+they do with a molecule that ends with something open. Closing appends the missing ring
+digit and brackets: it doubles the number of unique valid molecules and leaves the length
+distribution nearly intact, which makes it the honest default. Mixed picks per string
+between closing and trimming and gives 3.7x the molecules, but the average one is 26
+characters against the corpus 44, so the distribution moves and the number must always be
+quoted next to that length. Trimming alone is the extreme case of the same trade.
 
 Clamping the x0 estimate onto the nearest token embedding, the trick that helps in
-Diffusion-LM, is clearly harmful here at full strength: it drags the trajectory onto a
-single token early and the samples become long repetitive strings.
+Diffusion-LM, is harmful here at full strength and neutral at 0.1, so the default stays
+off.
 
 ## Solver settings, same checkpoint
 
@@ -227,3 +228,35 @@ single token early and the samples become long repetitive strings.
 The stochastic sampler with sigma 1.0 is already the best of these, the deterministic
 limit is a point and a half worse, and the step count barely matters: 100 steps match
 1000, so generation can be three times cheaper than it was.
+
+## Screening at a fixed size and budget
+
+Every row: 5.04M parameters, batch 1024, 17,600 steps (80 tokens per parameter), grammar
+loss off, seed 42, argmax decoding, 10,000 attempts. One knob changed per row. The
+reference row is the budget sweep point at the same step count.
+
+| run | what changed | validity |
+|---|---|---|
+| r_tlogit0 | timesteps drawn logit-normal instead of uniform | **13.55%** |
+| r_emb16 | latent width 16 instead of 32 | 6.89% |
+| r_ce3 | cross-entropy weight 3.0 instead of 1.0 | 6.82% |
+| r_sphere | x0 corruption drawn on the sphere | 5.88% |
+| r_emb64 | latent width 64 | 5.75% |
+| exp_bud80_s42 | reference | 5.28% |
+| r_lr6e3 | learning rate 6e-3 | 5.13% |
+| r_tlogit1 | logit-normal centred at +1 (towards data) | 4.95% |
+| r_lr1e3 | learning rate 1e-3 | 3.27% |
+| r_maskloss | padding taken out of the loss | 1.58% |
+| r_embrms_n50 | unit-norm embeddings, corruption 0.5 | 1.58% |
+| r_embrms | unit-norm embeddings | 1.40% |
+| r_mixup | x0 corruption by mixing token embeddings | 0.44% |
+| r_regimex | predict x0 instead of the noise | 0.35% |
+| r_maskattn | padding taken out of attention | 0.05% |
+| r_laplace | Laplace x0 corruption | 0.00% |
+
+The timestep distribution is the single largest training-side effect found so far: 13.55%
+against 5.28% at the same cost, and better than the reference trained on four times the
+tokens (12.85%). Its direction matters as much as its use, since centring the same
+distribution towards the data end gives nothing. The two masking rows confirm from the
+other side that padding carries the termination signal: remove it and generation
+collapses.
