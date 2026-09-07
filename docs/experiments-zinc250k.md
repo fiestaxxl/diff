@@ -546,3 +546,29 @@ molecules per 10,000 attempts with uniqueness at or above 99.5% and lengths of 4
 against the corpus 44. That is the number to quote: about 3800 on average against 1307 for
 the reference decoded the same way, and against 617 for the original setup at its own
 default settings.
+
+## Reading the same runs with a seed-aware tool
+
+`scripts/compare_configs.py` groups sampled runs by configuration, averages over seeds and
+calls an effect only when a group's worst seed beats the reference's best. Applied to every
+generation done with the repair decoder at 100 solver steps, against the uniform-timestep
+reference:
+
+| configuration | seeds | mean | range | verdict |
+|---|---|---|---|---|
+| logit-normal + sphere corruption | 2 | 64.55% | 63.08-66.02 | clears the reference |
+| logit-normal + cross-entropy weight 3 | 2 | 60.33% | 60.29-60.38 | clears the reference |
+| logit-normal alone | 3 | 48.70% | 30.88-68.00 | inside the spread |
+| logit-normal + padding weight 0.6 | 2 | 46.75% | 34.04-59.47 | inside the spread |
+| reference | 2 | 43.11% | 42.23-44.00 | - |
+
+This reverses the earlier reading in a useful way. Plain logit-normal timesteps have a high
+mean and a range so wide that the conservative test cannot separate them from the
+reference. Adding a heavier cross-entropy on top does not just raise the mean, it collapses
+the spread: 60.29% and 60.38% on two seeds is tighter than the reference's own two seeds.
+Sphere corruption behaves the same way, 63.08% and 66.02%.
+
+So the configuration to carry forward is not the timestep change alone but the timestep
+change with the readout weighted up, and the reason to prefer it is stability as much as
+the mean. On argmax the same group reads 16.48% over three seeds, range 13.99-18.82,
+against 5.55-6.19% for the reference.
