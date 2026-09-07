@@ -41,15 +41,18 @@ tokenizer:
 #############
 model:
   name: diffusion_transformer  # registry key; see dimol/builders.py
-  model_dim: 768               # residual stream width; the main capacity/speed knob
+  model_dim: 256               # residual stream width; the main capacity/speed knob
   emb_dim: 32                  # dimension of the latent the diffusion actually runs in
                                # (token embeddings). Raising it makes the denoising
                                # problem higher-dimensional but gives the decoder more
                                # room; it also sets p_simple's shape
-  time_dim: 768                # width of the timestep embedding fed to adaLN modulation
-  num_heads: 12                # model_dim / num_heads = 64 = head_dim, a good size for
+  time_dim: 256                # width of the timestep embedding fed to adaLN modulation
+  num_heads: 4                 # model_dim / num_heads = 64 = head_dim, a good size for
                                # flash attention; keep the ratio at 64 when scaling
-  num_text_blocks: 4           # transformer blocks in the denoiser; depth knob
+  num_text_blocks: 4           # transformer blocks in the denoiser; depth knob.
+                               # 256/4 gives 5.0M parameters: the workhorse for testing
+                               # hypotheses fast. Scale it up with the same tokens per
+                               # parameter budget (see docs/scaling-zinc250k.md)
   vocab_size: ${variables.vocab_size}   # must be >= the tokenizer vocab (checked)
   pad_idx: ${variables.pad_idx}         # row kept at zero in the embedding table
   max_pos: 64                  # RoPE table size; must be >= seq_len, cheap to over-size
@@ -162,8 +165,8 @@ scheduler:
   name: warmup_cosine          # linear warmup then cosine decay to min_lr
   max_lr: 3.0e-3               # peak lr reached at the end of warmup
   min_lr: 3.0e-5               # lr after t_max and the floor of the cosine
-  t_warmup: 500ba              # warmup length in optimizer steps (ba) or epochs (ep)
-  t_max: 10000ba               # where the cosine bottoms out; keep it at max_duration
+  t_warmup: 200ba              # warmup length in optimizer steps (ba) or epochs (ep)
+  t_max: 2200ba                # where the cosine bottoms out; keep it at max_duration
 
 algorithms:
   gradient_clipping:
@@ -173,17 +176,21 @@ algorithms:
 #######################
 ### Training params ###
 #######################
-max_duration: 10000ba          # end of training, in epochs (ep) or optimizer steps (ba).
-                               # 224,568 molecules at batch 512 is 438 steps per epoch,
-                               # so this is about 23 epochs
-global_train_batch_size: null  # molecules per optimizer step across all ranks.
-                               # null = device_train_microbatch_size * n_gpus, i.e. the
-                               # batch grows with the number of GPUs. Set a number to
-                               # keep the batch fixed while scaling hardware
-device_train_microbatch_size: 512   # molecules per forward pass per GPU; the memory knob.
-                               # grad accumulation is derived: global / (micro * n_gpus)
-device_eval_batch_size: 512    # same for evaluation, where no gradients are stored
-eval_interval: 250ba            # how often the eval loader runs
+max_duration: 2200ba           # the token budget, in optimizer steps. ZINC train holds
+                               # 5.06M real tokens per epoch and 224,568 molecules, so at
+                               # global batch 1024 one epoch is 219 steps. 2200 steps is
+                               # 10 epochs, i.e. 10 tokens per parameter for the 5.0M
+                               # model. Keep the tokens-per-parameter constant when the
+                               # model changes: steps = 20 * params / (1024 * 22.5)
+global_train_batch_size: 1024  # molecules per optimizer step across all ranks. Fixed on
+                               # purpose: the token budget is expressed in steps, so the
+                               # batch must not drift with the number of GPUs
+device_train_microbatch_size: 1024  # molecules per forward pass per GPU; the memory knob.
+                               # grad accumulation is derived: global / (micro * n_gpus).
+                               # Throughput saturates near 3M tokens/s around 2048, and a
+                               # bigger batch would only cut the number of optimizer steps
+device_eval_batch_size: 2048   # same for evaluation, where no gradients are stored
+eval_interval: 100ba            # how often the eval loader runs
 eval_subset_num_batches: -1    # -1 = whole eval split; a positive number caps it
 eval_before_train: skip        # skip | regular: run one evaluation before step 1
 decoder_pretrain_steps: 0      # first N steps train with lambda_mse = 0, i.e. readout
@@ -214,7 +221,7 @@ loggers:
   console: {}
   jsonl: {}                    # metrics.jsonl inside the run dir, one line per event
   comet:
-    enabled: true              # needs COMET_API_KEY in the environment
+    enabled: false             # off by request; console and metrics.jsonl are enough
     project_name: diffusion_smiles_model
     mode: create               # create a new experiment instead of resuming one
 
@@ -235,7 +242,7 @@ load_weights_only: false       # load weights but start the step counter at zero
 ################
 sampling:
   enabled: true                # generate molecules during training; needs rdkit
-  interval: 1000ba             # how often; sampling is expensive, keep it rare
+  interval: 500ba              # how often; sampling is expensive, keep it rare
   num_samples: 256             # molecules per sampling round, per rank
   num_timesteps: 300           # Euler-Maruyama steps; more = better samples, linear cost
   variance: 1.0                # the sigma of the reverse SDE; 0 turns it into an ODE

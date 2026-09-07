@@ -106,7 +106,12 @@ def _sample_fn(
         progress=bool(sc.progress),
     )
     smiles = sample_smiles(model, path, tokenizer, params, device)
-    metrics = {"validity": validity(smiles)}
+    try:
+        metrics = {"validity": validity(smiles)}
+    except ImportError:
+        # No rdkit in this container: the samples are still written to disk and can be
+        # scored later with scripts/evaluate_samples.py where rdkit is available.
+        metrics = {}
     if run_dir is not None and rank == 0:
         out = Path(run_dir) / "samples"
         out.mkdir(parents=True, exist_ok=True)
@@ -189,11 +194,12 @@ def main(cfg: DictConfig) -> None:
     if str(cfg.task) == "diffusion" and bool(cfg.sampling.enabled) and tokenizer is not None:
         try:  # probe rdkit now rather than sampling.interval steps later
             import rdkit  # noqa: F401
-        except ImportError as exc:
-            raise ImportError(
-                "sampling.enabled=true requires rdkit (pip install 'dimol[chem]'); "
-                "otherwise set sampling.enabled=false"
-            ) from exc
+        except ImportError:
+            print(
+                "[sampling] rdkit is missing: molecules will be written to "
+                "<run>/samples/ba*.txt but validity will not be logged. Score them with "
+                "scripts/evaluate_samples.py where rdkit is installed."
+            )
         sample_fn = partial(
             _sample_fn,
             model=model,

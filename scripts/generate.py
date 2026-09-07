@@ -64,6 +64,17 @@ def main(cfg: DictConfig) -> None:
     seed_all(seed)
     smiles = sample_smiles(model, path, tokenizer, params, device)
 
+    out_dir = Path(gen.get("output_dir") or checkpoint)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "samples.txt").write_text("\n".join(smiles) + "\n")
+    print(f"{len(smiles)} samples written to {out_dir / 'samples.txt'}")
+
+    if not bool(gen.get("report", True)):
+        # Sampling needs the GPU, scoring needs rdkit; when they live in different
+        # places, generate here and run scripts/evaluate_samples.py there.
+        print("generate.report=false: skipping the quality report")
+        return
+
     train_canon = load_train_canon(gen.get("train_smiles_path"))
     metrics = evaluate_smiles(smiles, train_canon=train_canon)
 
@@ -73,12 +84,9 @@ def main(cfg: DictConfig) -> None:
     for s in smiles[:20]:
         print(f"  {s!r}")
 
-    out_dir = Path(gen.get("output_dir") or checkpoint)
-    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "report.txt").write_text(
         report + "\n\n" + "\n".join(f"  {s!r}" for s in smiles[:20]) + "\n"
     )
-    (out_dir / "samples.txt").write_text("\n".join(smiles) + "\n")
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
     print(f"report and samples written to {out_dir}")
 
