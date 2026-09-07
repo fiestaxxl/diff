@@ -94,7 +94,22 @@ loss:
                                # Lower it to train the readout on noisier latents
   mse_t0_alpha_threshold: 0.80 # same gate for the reconstruction term
   grammar_alpha_threshold: 0.5 # same gate for the grammar term
-  label_smoothing: 0.0         # label smoothing inside the cross-entropy
+  label_smoothing: 0.0         # label smoothing inside the cross-entropy. 0.05 measured
+                               # slightly above the reference at 80 tokens per parameter
+  pad_weight: 1.0              # weight of padding positions in the denoising MSE.
+                               # 1.0 = original behaviour, 0.0 is the same as taking
+                               # padding out of the loss. Padding is the only signal that
+                               # tells the model where a molecule ends, so lowering this
+                               # costs validity: 0.3 measured below the reference
+  min_snr_gamma: null          # null = every timestep weighted alike (original). A number
+                               # caps the per-sample weight at min(SNR, gamma)/SNR. Do not
+                               # turn this on here: the cross-entropy and reconstruction
+                               # terms are gated to high-SNR steps, so capping them
+                               # removes the token-level supervision (0.47% vs 5.28%)
+  ce_include_pad: false        # false = original behaviour, the cross-entropy ignores
+                               # padding, so the readout is never told to emit it. true
+                               # supervises termination explicitly at the cost of a very
+                               # frequent easy class
   grammar_enabled: true        # build the grammar tables at all; with lambda_grammar=0
                                # the term and its softmax are skipped entirely
   ce_input: x0                 # x0 = original behaviour, the readout is trained on the

@@ -24,8 +24,14 @@ generate:
   seq_len: ${variables.seq_len}
   num_samples: 2000              # >= 2000 for a stable estimate of low validity
   batch_size: 500
-  num_timesteps: 300
-  variance: 1.0
+  num_timesteps: 300             # solver steps. 100 measured equal to 1000, so 100 is
+                                 # the cheap default for screening
+  variance: 1.0                  # noise in the reverse SDE. 1.0 is best measured; 0.0 is
+                                 # the deterministic probability flow and 1.4 points worse
+  time_grid: uniform             # where the solver puts its steps: uniform (original),
+                                 # data_dense, noise_dense, mid_dense, ends_dense. The
+                                 # endpoints and the step count are the same either way
+  time_grid_power: 2.0           # how hard the non-uniform grids are skewed
   t_start: 1.0e-3
   t_end: 0.999
   seed: 42                       # fixed, so runs are comparable
