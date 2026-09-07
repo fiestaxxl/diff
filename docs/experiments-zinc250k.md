@@ -187,3 +187,43 @@ embedding norm grows from 0.112 to 5.4, i.e. a per-dimension standard deviation 
 the variance. The model repairs the schedule on its own, which is why lowering
 `x0_noise_std` to 0.10 did not help and why absolute loss values cannot be compared
 across a run.
+
+## Decoding, measured on one fixed checkpoint
+
+No training involved: the same 5.0M model trained to 160 t/p (9.69% validity with the
+plain decoder), 10,000 molecules each, 100 solver steps.
+
+| decoding | validity | uniqueness | mean length | unique valid |
+|---|---|---|---|---|
+| argmax (the original) | 9.67% | 99.5% | 43.6 | 960 |
+| grammar repair, close what is open | **20.70%** | 100% | 45.0 | 2070 |
+| grammar repair, trim what is open | **62.91%** | 58.5% | 25.6 | 3066 |
+| argmax + clamping the x0 estimate | 0.43% | 86.0% | 134.0 | 37 |
+| grammar trim + clamping | 11.52% | 43.0% | 83.3 | 369 |
+
+The corpus median length is 44 characters, which is the reference for the third column.
+
+Both repair modes remove parenthesis failures entirely and cut ring failures to under a
+tenth of what they were, so the remaining invalid strings are 91% valence and
+aromaticity errors. The two modes differ in what they do with a molecule that ends with
+something open: trimming cuts back to the last balanced point, which triples the number
+of unique valid molecules but produces strings half the corpus length, so the
+distribution moves; closing appends the missing ring digit and brackets, which keeps the
+length distribution and uniqueness intact and still doubles validity. Closing is the
+honest default, trimming is the number to quote only next to the length it produces.
+
+Clamping the x0 estimate onto the nearest token embedding, the trick that helps in
+Diffusion-LM, is clearly harmful here at full strength: it drags the trajectory onto a
+single token early and the samples become long repetitive strings.
+
+## Solver settings, same checkpoint
+
+| sigma | 100 steps | 300 steps | 1000 steps |
+|---|---|---|---|
+| 1.0 | 9.67% | 9.69% | 10.00% |
+| 0.5 | 9.34% | 8.99% | 8.76% |
+| 0.0 (probability flow) | 8.69% | 8.29% | 8.35% |
+
+The stochastic sampler with sigma 1.0 is already the best of these, the deterministic
+limit is a point and a half worse, and the step count barely matters: 100 steps match
+1000, so generation can be three times cheaper than it was.
