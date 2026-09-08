@@ -84,6 +84,7 @@ class DiffusionTask(Task):
         mask_padding: str = "none",
         pad_weight: float = 1.0,
         self_cond_prob: float = 0.5,
+        caption_dropout: float = 0.1,
         gate_mode: str = "threshold",
         gate_fraction: float = 0.41,
         ce_include_pad: bool = False,
@@ -146,6 +147,13 @@ class DiffusionTask(Task):
         # with that estimate fed back. The first pass costs one extra forward and no
         # backward, and the gradient never flows through it.
         self.self_cond_prob = float(self_cond_prob)
+        # Classifier-free guidance is bought here: on this share of examples the caption
+        # is masked out, so one set of weights learns both the conditional and the
+        # unconditional score and sampling can extrapolate between them. Per example
+        # rather than per step, so every batch trains both.
+        if not 0.0 <= float(caption_dropout) < 1.0:
+            raise ValueError(f"loss.caption_dropout={caption_dropout!r} must be in [0, 1)")
+        self.caption_dropout = float(caption_dropout)
         # The cross-entropy and the reconstruction term run only on the low-noise part of
         # the batch, selected by alpha > threshold. How much of a batch that is depends on
         # the timestep draw, so it varies from step to step and shifts when the timestep
@@ -287,8 +295,30 @@ class DiffusionTask(Task):
         # (B, 1, 1, L) boolean mask; True marks positions that take part in attention
         attn_mask = pad_mask[:, None, None, :].bool() if self.mask_attention else None
         forward_ctx = nullcontext if self.autocast_scope == "loss" else self.autocast
-        x0_self = None
         raw_model = unwrap_model(model)
+
+        # The caption, with classifier-free guidance dropout applied once so that the
+        # self-conditioning pre-pass and the real pass see the same conditioning. The
+        # task is not an nn.Module, so "are we training" comes from the model.
+        text_kwargs: Dict[str, torch.Tensor] = {}
+        if int(getattr(raw_model.config, "text_dim", 0) or 0):
+            text = batch.get("text")
+            if text is None:
+                raise ValueError(
+                    "the model has a text path but the batch carries no 'text'; "
+                    "use the smiles_text_npy dataset"
+                )
+            text_mask = batch.get("text_mask")
+            if text_mask is None:
+                text_mask = torch.ones(text.shape[:2], dtype=torch.bool,
+                                       device=text.device)
+            if raw_model.training and self.caption_dropout > 0:
+                keep = (torch.rand(text.shape[0], device=text.device)
+                        >= self.caption_dropout)
+                text_mask = text_mask.bool() & keep[:, None]
+            text_kwargs = {"text": text, "text_mask": text_mask}
+
+        x0_self = None
         if getattr(raw_model, "self_conditioning", False) and self.self_cond_prob > 0:
             # Two things here are about DDP, and both were bugs.
             #
@@ -308,6 +338,7 @@ class DiffusionTask(Task):
                               "attention_mask": attn_mask}
                 if getattr(raw_model, "length_conditioning", False):
                     pre_kwargs["length"] = pad_mask.long().sum(-1)
+                pre_kwargs.update(text_kwargs)
                 with torch.no_grad(), forward_ctx():
                     first = raw_model(**pre_kwargs)
                 alpha_first = alpha.clamp(min=self.alpha_eps)
@@ -317,6 +348,7 @@ class DiffusionTask(Task):
                     x0_self = first.detach()
 
         forward_kwargs = {"input_embeddings": x, "time": time, "attention_mask": attn_mask}
+        forward_kwargs.update(text_kwargs)
         if getattr(raw_model, "length_conditioning", False):
             if pad_mask is None:
                 raise ValueError(

@@ -133,5 +133,51 @@ class SmilesDataset(Dataset):
         }
 
 
+class PairedSmilesTextDataset(SmilesDataset):
+    """A tokenized split plus the frozen caption encoding that goes with each molecule.
+
+    Adds to the layout above, written by scripts/prepare_paired.py:
+
+        <data_dir>/<split>_text.npy         (N, S, D) float16
+        <data_dir>/<split>_text_mask.npy    (N, S)    uint8
+
+    Row i of every array is the same pair, which is why the paired preparation refuses to
+    deduplicate or reshuffle: a caption separated from its molecule is worthless, and a
+    benchmark's splits are part of the benchmark.
+
+    The caption states are memory-mapped like the molecules. They are large, 5 GB for
+    ChEBI-20's training split at 128 tokens of SciBERT, and they never change, because the
+    encoder is frozen and the encoding was done once.
+    """
+
+    def __init__(self, data_dir: str | Path, split: str, mmap: bool = True):
+        super().__init__(data_dir, split, mmap=mmap)
+        directory = Path(data_dir)
+        text_path = directory / f"{split}_text.npy"
+        mask_path = directory / f"{split}_text_mask.npy"
+        for path in (text_path, mask_path):
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} is missing; run scripts/prepare_paired.py --stage text"
+                )
+        how = "r" if mmap else None
+        self.text = np.load(text_path, mmap_mode=how)
+        self.text_mask = np.load(mask_path, mmap_mode=how)
+        if len(self.text) != self.num_samples:
+            raise ValueError(
+                f"split {split!r}: {self.num_samples} molecules but {len(self.text)} "
+                "captions; the arrays are not aligned"
+            )
+
+    def __getitem__(self, idx: int) -> dict:
+        item = super().__getitem__(idx)
+        if idx < 0:
+            idx += self.num_samples
+        item["text"] = torch.from_numpy(np.asarray(self.text[idx], dtype=np.float32))
+        item["text_mask"] = torch.from_numpy(np.asarray(self.text_mask[idx], dtype=bool))
+        return item
+
+
 registry.datasets.register("smiles_npy")(SmilesDataset)
+registry.datasets.register("smiles_text_npy")(PairedSmilesTextDataset)
 registry.datasets.register("random")(SimpleDataset)

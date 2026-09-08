@@ -112,3 +112,78 @@ def test_the_config_round_trips_the_text_width(tmp_path):
     again = DiffusionTransformer.from_pretrained(load_dir=str(tmp_path / "ckpt"),
                                                  map_location="cpu")
     assert again.config.text_dim == TEXT_DIM
+
+
+def _task(**kwargs):
+    from dimol.diffusion.conditionals import CosineAlpha, CosineBeta
+    from dimol.diffusion.paths import GaussianConditionalProbabilityPath
+    from dimol.training.tasks import DiffusionTask
+
+    path = GaussianConditionalProbabilityPath(
+        p_simple_shape=[SEQ, 8], alpha=CosineAlpha("cpu"), beta=CosineBeta("cpu"))
+    params = dict(pad_idx=0, lambda_grammar=0.0, grammar_enabled=False, seq_len=SEQ)
+    params.update(kwargs)
+    return DiffusionTask(path, **params)
+
+
+def _batch(batch: int = 6):
+    ids = torch.randint(1, VOCAB, (batch, SEQ))
+    ids[:, -2:] = 0
+    text, mask = _text(batch)
+    return {"token_ids": ids, "attention_mask": ids != 0,
+            "text": text, "text_mask": mask}
+
+
+def test_the_loss_runs_with_a_caption():
+    torch.manual_seed(0)
+    out = _task().compute_loss(_model(), _batch())
+    assert torch.isfinite(out["loss"])
+    out["loss"].backward()
+
+
+def test_a_missing_caption_is_reported():
+    batch = _batch()
+    batch.pop("text")
+    with pytest.raises(ValueError, match="no 'text'"):
+        _task().compute_loss(_model(), batch)
+
+
+def test_caption_dropout_only_fires_while_training():
+    """Evaluation must always see the caption, or the eval loss measures something else."""
+    torch.manual_seed(0)
+    model = _model()
+    with torch.no_grad():
+        for module in model.modules():
+            if isinstance(module, MultiheadCrossAttention):
+                module.out_layer.weight.normal_(std=0.3)
+    batch = _batch(batch=64)
+    task = _task(caption_dropout=0.99)  # nearly everything, to make the effect visible
+
+    model.eval()
+    torch.manual_seed(3)
+    kept = task.compute_loss(model, batch)["loss"].item()
+    model.train()
+    torch.manual_seed(3)
+    dropped = task.compute_loss(model, batch)["loss"].item()
+    assert kept != dropped
+
+
+def test_dropout_zero_never_drops():
+    torch.manual_seed(0)
+    model = _model()
+    model.train()
+    task = _task(caption_dropout=0.0)
+    assert torch.isfinite(task.compute_loss(model, _batch())["loss"])
+
+
+def test_an_impossible_dropout_is_refused():
+    """1.0 is refused too: dropping every caption makes the text path untrainable."""
+    for bad in (1.0, 1.5, -0.1):
+        with pytest.raises(ValueError, match="caption_dropout"):
+            _task(caption_dropout=bad)
+
+
+def test_self_conditioning_and_the_caption_compose():
+    torch.manual_seed(0)
+    out = _task(self_cond_prob=1.0).compute_loss(_model(), _batch(), step=0)
+    assert torch.isfinite(out["loss"])
