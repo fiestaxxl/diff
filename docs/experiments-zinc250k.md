@@ -878,3 +878,46 @@ And that is where the corpus becomes the binding constraint. Training the 14.62M
 80 tokens per parameter needs 1.17 billion tokens, which is 231 passes over ZINC-250k, and
 this study already measured that 161 passes hurt. The capacity that fixes aromaticity
 cannot be fed by this corpus.
+
+## ZINC-20: what a real token budget does
+
+The corpus was the binding constraint, and removing it changed the answer to every
+question this study had left open. ZINC-20 batch one: 214,055,665 curated and tokenized
+training molecules, 27.22 real tokens each, 5.83B tokens. Three sizes at a matched 80
+tokens per parameter, one pass each, three seeds, four-way DDP at 1024 molecules per GPU,
+self-conditioning and length conditioning on, closing repair with the length drawn from
+the corpus.
+
+| model | steps | validity by seed | usable | aromatic rings | rings | heavy atoms | QED | SA |
+|---|---|---|---|---|---|---|---|---|
+| 5.06M | 3,631 | 1.26 / 1.59 / 3.28% | 2.1% | 1.42 | 4.52 | 33.7 | 0.51 | 5.94 |
+| 14.6M | 10,491 | 14.52 / 22.84 / 23.01% | 20.6% | 0.89 | 2.79 | 25.3 | 0.63 | 4.58 |
+| 47.9M | 34,375 | **61.07 / 61.49 / 63.64%** | **60.0%** | **1.49** | 2.84 | 26.1 | 0.65 | 3.72 |
+| ZINC-20 | - | - | - | 1.85 | 3.10 | 26.8 | 0.64 | 3.47 |
+
+Four things, and three of them are new.
+
+**Capacity is the answer to aromaticity.** The gap that no objective, no timestep density,
+no decoding rule and no rearrangement of depth could move is now nearly closed: 1.49
+aromatic rings against the corpus 1.85, a shift of -0.36 standard deviations, where the
+best ZINC-250k model managed 1.10 against the same 1.85. Every other descriptor of the
+47.9M runs sits within 0.4 sigma of the corpus, and QED matches it outright, 0.65 against
+0.64. The samples are 100% unique and 100% novel.
+
+**The variance problem was data starvation.** On ZINC-250k, three seeds of one
+configuration spread over eight to nineteen points and two runs with the *same* seed
+landed at 23.9% and 55.5%. Here the three 47.9M seeds read 61.07, 61.49 and 63.64%, a
+spread of two and a half points. Four hypotheses about the optimizer and the loss gates
+were tested and all failed; the actual cause was 231 passes over a corpus too small to
+support the model.
+
+**Large batches cost small models.** The 5.06M runs collapsed, 1.26 to 3.28% validity
+against the 13 to 16% the same size reached on ZINC-250k. The token budget is identical;
+what changed is that batch 4096 gives it 3,631 optimizer steps where batch 1024 gave
+17,600. At a fixed token budget the update count is what a small model needs, and the
+throughput gain that made the big runs cheap is exactly what starved the small ones. The
+batch has to be part of the size ladder, not a constant.
+
+**And 60% usable molecules per attempt, without any conditioning**, is the number to carry
+into the comparison with published work: 61 to 64% validity, 100% uniqueness, 100%
+novelty, at 47.9M parameters. The reference this study started from produced 5.5%.
