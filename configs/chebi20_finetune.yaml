@@ -63,15 +63,17 @@ tokenizer:
 #############
 model:
   name: diffusion_transformer  # registry key; see dimol/builders.py
-  model_dim: 256               # residual stream width; the main capacity/speed knob
+  model_dim: 640               # residual stream width; the main capacity/speed knob.
+                               # This is the shape of the backbone being fine-tuned,
+                               # 47.9M parameters, and it has to match the checkpoint
   emb_dim: 32                  # dimension of the latent the diffusion actually runs in
                                # (token embeddings). Raising it makes the denoising
                                # problem higher-dimensional but gives the decoder more
                                # room; it also sets p_simple's shape
   time_dim: 256                # width of the timestep embedding fed to adaLN modulation
-  num_heads: 4                 # model_dim / num_heads = 64 = head_dim, a good size for
+  num_heads: 10                # model_dim / num_heads = 64 = head_dim, a good size for
                                # flash attention; keep the ratio at 64 when scaling
-  num_text_blocks: 4           # transformer blocks in the denoiser; depth knob.
+  num_text_blocks: 8           # transformer blocks in the denoiser; depth knob.
                                # 256/4 gives 5.0M parameters: the workhorse for testing
                                # hypotheses fast. Scale it up with the same tokens per
                                # parameter budget (see docs/scaling-zinc250k.md)
@@ -244,10 +246,14 @@ optimizer:
 
 scheduler:
   name: warmup_cosine          # linear warmup then cosine decay to min_lr
-  max_lr: 3.0e-3               # peak lr reached at the end of warmup
-  min_lr: 3.0e-5               # lr after t_max and the floor of the cosine
+  max_lr: 1.0e-4               # peak lr reached at the end of warmup. This is the knob
+                               # that matters, not optimizer.lr, which the schedule
+                               # overwrites every step. Pretraining used 6e-4; a
+                               # fine-tune on 25k pairs runs an order of magnitude below
+                               # that, or it overwrites the chemistry the backbone knows
+  min_lr: 1.0e-5               # lr after t_max and the floor of the cosine
   t_warmup: 100ba              # warmup length in optimizer steps (ba) or epochs (ep)
-  t_max: 2200ba                # where the cosine bottoms out; keep it at max_duration
+  t_max: 6000ba                # where the cosine bottoms out; keep it at max_duration
 
 algorithms:
   gradient_clipping:
