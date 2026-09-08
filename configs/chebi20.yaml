@@ -1,0 +1,29 @@
+# ChEBI-20: the molecule-and-caption benchmark the text-guided baselines are measured on.
+#
+#   python scripts/prepare_paired.py --stage molecules --config configs/chebi20.yaml
+#   python scripts/prepare_paired.py --stage text      --config configs/chebi20.yaml
+#
+# The tokenizer is the shared one: ZINC-20's 386 tokens with 244 appended for ChEBI's
+# chemistry, every original id preserved, so a ZINC-pretrained checkpoint can be grown
+# into it instead of retrained. Canvas 128 costs 3.3% of ChEBI's molecules; 64 would cost
+# 17.1% and 256 would spend most of the compute on padding.
+
+run_name: chebi20
+
+tokenizer:
+  path: data/shared/tokenizers/zinc20_chebi.json
+
+prepare:
+  source:
+    hf_repo: liupf/ChEBI-20-MM
+    smiles_column: SMILES
+    text_column: description
+    splits:                    # our name -> upstream name; the benchmark's own splits
+      train: train
+      val: validation
+      test: test
+
+  tokenized_dir: data/chebi20/tokenized
+  max_length: 128              # canvas for the molecule
+  text_encoder: /workspace-SR008.nfs2/iseguryev/diffusion/raw/scibert
+  text_length: 128             # caption tokens kept; 10.9% of captions are longer
