@@ -331,13 +331,10 @@ load_weights_only: true        # weights only: no optimizer state, step counter 
 ### Sampling ###
 ################
 sampling:
-  enabled: true                # generate molecules during training; needs rdkit
-  interval: 500ba              # how often; sampling is expensive, keep it rare
-  num_samples: 256             # molecules per sampling round, per rank
-  num_timesteps: 300           # Euler-Maruyama steps; more = better samples, linear cost
-  variance: 1.0                # the sigma of the reverse SDE; 0 turns it into an ODE
-  t_start: 1.0e-4              # integration starts here (pure noise end)
-  t_end: 0.999                 # and stops here (data end)
-  seed: null                   # null = process rank, so ranks generate different molecules
-  batch_size: null             # null = all num_samples in one forward
-  log_examples: 10             # how many decoded SMILES to print into the log
+  enabled: false               # The generic callback samples unconditionally, which for
+                               # a text-conditioned model measures nothing: it would draw
+                               # molecules with no caption and score them against no
+                               # reference. It also cannot run at all here, because a
+                               # length-conditioned model needs a length prior it has no
+                               # way to know about. Quality during this run is measured by
+                               # scripts/eval_text.py against saved checkpoints instead.
