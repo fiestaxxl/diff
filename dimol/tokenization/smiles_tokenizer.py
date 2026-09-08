@@ -348,6 +348,22 @@ class SmilesTokenizer:
     def mask_id(self) -> int:
         return self._tok.token_to_id(self.MASK)
 
+    def add_tokens(self, tokens: List[str]) -> int:
+        """Append tokens to the vocabulary, leaving every existing id where it is.
+
+        This is how a tokenizer trained on one corpus is stretched to cover another
+        without discarding a pretrained embedding table: `tokenizers` gives added tokens
+        the next free ids, so the rows already learned keep their meaning and the new
+        atoms get fresh ones. They are added the same way bracket atoms are during
+        training, inviolable and unnormalized, so nothing splits them further.
+        """
+        if not tokens:
+            return 0
+        return self._tok.add_tokens([
+            AddedToken(t, single_word=False, lstrip=False, rstrip=False, normalized=False)
+            for t in tokens
+        ])
+
     def get_vocab(self) -> dict:
         return self._tok.get_vocab()
 
