@@ -71,6 +71,10 @@ class SamplingParams:
     text_mask: Optional[Any] = None
     guidance: float = 0.0         # classifier-free guidance scale; 0 is plain conditional
     length_prior: Optional[Any] = None  # 1-d array of token lengths to draw from
+    length_exact: bool = False    # use row i of length_prior for sample i, rather than
+                                  # drawing from it. Only honest when the length is known
+                                  # or predicted; against a benchmark it is an oracle and
+                                  # has to be labelled as one
     length_floor: bool = False    # also forbid stopping before the drawn length
     refine_rounds: int = 0        # extra denoise-renoise cycles after the trajectory
     refine_t: float = 0.9         # how far back each cycle re-noises to
@@ -192,7 +196,17 @@ def sample_smiles(
         drawn_lengths = None
         if pad_embedding is not None:
             generator = torch.Generator(device="cpu").manual_seed(params.seed + done)
-            lengths = _draw_lengths(params.length_prior, b, canvas, generator)
+            if params.length_exact:
+                lengths = (torch.as_tensor(params.length_prior, dtype=torch.long)
+                           [done : done + b].clamp(1, canvas))
+                if lengths.numel() != b:
+                    raise ValueError(
+                        "generate.length_exact needs one length per sample, and "
+                        f"length_prior has {len(params.length_prior)} for "
+                        f"{params.num_samples} samples"
+                    )
+            else:
+                lengths = _draw_lengths(params.length_prior, b, canvas, generator)
             drawn_lengths = lengths
             positions = torch.arange(canvas).view(1, canvas)
             known = (positions >= lengths.view(b, 1)).to(device)  # True where padding

@@ -119,9 +119,12 @@ def stage_generate(args) -> None:
             text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
             length_prior=np.asarray(masks[:n]).sum(1),
+            length_exact=bool(args.oracle_length),
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
-        name = f"guidance_{scale}" + ("_shuffled" if args.shuffle_captions else "")
+        name = (f"guidance_{scale}"
+                + ("_shuffled" if args.shuffle_captions else "")
+                + ("_oraclelen" if args.oracle_length else ""))
         (args.out / f"{name}.txt").write_text("\n".join(generated) + "\n")
         ok = sum(grammatical(s) for s in generated)
         f1 = float(np.mean([token_f1(g, r, tokenizer)
@@ -190,6 +193,10 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--oracle-length", action="store_true",
+                        help="give each sample the reference molecule's own length. An "
+                             "upper bound, not a result: a real system would have to "
+                             "predict the length from the caption")
     parser.add_argument("--shuffle-captions", action="store_true",
                         help="pair every molecule with somebody else's caption. The "
                              "control that separates weak conditioning from none: if the "

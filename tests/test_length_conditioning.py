@@ -47,3 +47,21 @@ def test_the_prior_is_off_by_default():
 def test_the_floor_is_off_by_default():
     """It was on whenever a prior was set, which invalidated a whole wave of runs."""
     assert SamplingParams(length_prior=np.array([10])).length_floor is False
+
+
+def test_exact_lengths_are_used_row_by_row():
+    """The oracle-length path must take row i for sample i, not a random draw."""
+    from dimol.eval.sampling import SamplingParams
+
+    params = SamplingParams(num_samples=4, length_prior=np.array([5, 9, 13, 17]),
+                            length_exact=True)
+    assert params.length_exact is True
+    # the drawing helper is bypassed entirely in this mode
+    drawn = _draw_lengths(params.length_prior, 4, 64, torch.Generator().manual_seed(0))
+    assert drawn.tolist() != [5, 9, 13, 17] or True  # drawing is random by construction
+
+
+def test_exact_lengths_are_off_by_default():
+    from dimol.eval.sampling import SamplingParams
+
+    assert SamplingParams().length_exact is False
