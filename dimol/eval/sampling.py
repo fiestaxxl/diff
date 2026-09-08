@@ -42,7 +42,11 @@ import torch
 
 from dimol.diffusion.diff_eqs import LearnedScoreSDE
 from dimol.diffusion.simulators import EulerMaruyamaSimulator
-from dimol.models.denoiser import ClampedDenoiserModel, DenoiserModel
+from dimol.models.denoiser import (
+    ClampedDenoiserModel,
+    DenoiserModel,
+    GuidedDenoiserModel,
+)
 from dimol.training.distributed import unwrap_model
 
 
@@ -63,6 +67,9 @@ class SamplingParams:
     allowed_brackets: Optional[frozenset] = None  # bracket atoms the corpus contains
     on_disallowed: str = "next_best"  # what to do with an atom outside that set
     strict: bool = False          # full connectivity check instead of bracket counting
+    text: Optional[Any] = None    # frozen caption encodings, one row per sample
+    text_mask: Optional[Any] = None
+    guidance: float = 0.0         # classifier-free guidance scale; 0 is plain conditional
     length_prior: Optional[Any] = None  # 1-d array of token lengths to draw from
     length_floor: bool = False    # also forbid stopping before the drawn length
     refine_rounds: int = 0        # extra denoise-renoise cycles after the trajectory
@@ -138,7 +145,22 @@ def sample_smiles(
                             allowed_brackets=params.allowed_brackets,
                             on_disallowed=params.on_disallowed, strict=params.strict)
 
-    if params.clamp_strength > 0:
+    text_all = None if params.text is None else torch.as_tensor(params.text)
+    mask_all = None
+    if text_all is not None:
+        mask_all = (torch.ones(text_all.shape[:2], dtype=torch.bool)
+                    if params.text_mask is None
+                    else torch.as_tensor(params.text_mask).bool())
+        if text_all.shape[0] != params.num_samples:
+            raise ValueError(
+                f"generate.num_samples is {params.num_samples} but {text_all.shape[0]} "
+                "captions were given; one caption per sample"
+            )
+
+    if text_all is not None:
+        score_model = GuidedDenoiserModel(model, path, regime=params.regime,
+                                          scale=params.guidance)
+    elif params.clamp_strength > 0:
         score_model = ClampedDenoiserModel(
             model, path, regime=params.regime,
             strength=params.clamp_strength, from_alpha=params.clamp_from_alpha,
@@ -189,6 +211,9 @@ def sample_smiles(
             score_model.reset()  # self-conditioning must not carry across batches
         if needs_length:
             score_model.length = drawn_lengths.to(device)
+        if text_all is not None:
+            score_model.text = text_all[done : done + b].to(device).float()
+            score_model.text_mask = mask_all[done : done + b].to(device)
         xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
 
         for _ in range(max(int(params.refine_rounds), 0)):

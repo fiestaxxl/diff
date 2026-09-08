@@ -97,3 +97,68 @@ class ClampedDenoiserModel(nn.Module):
 
         score = (alpha_t * x0_pred - x) / (beta_t ** 2)
         return score
+
+
+class GuidedDenoiserModel(nn.Module):
+    """Classifier-free guidance: two forwards per step, extrapolated apart.
+
+    The conditional prediction says where the caption points, the unconditional one says
+    where the data manifold is anyway, and the difference is the part the caption is
+    responsible for. Pushing along that difference sharpens the sample towards the text at
+    the cost of diversity, which is the standard trade and the reason guidance exists.
+
+    The unconditional pass is the same weights with the caption masked out, which is
+    exactly what caption dropout trained: one model, two behaviours, no second network.
+
+    ``scale`` of 0 reproduces the conditional model, so the guided and unguided paths are
+    the same code and a sweep starts from the unguided point.
+    """
+
+    def __init__(self, eps_model, path, regime="epsilon", scale=1.0):
+        super().__init__()
+        self.eps_model = eps_model
+        self.path = path
+        self.regime = regime
+        self.scale = float(scale)
+        self._x0_self = None
+        self.length = None
+        self.text = None
+        self.text_mask = None
+
+    def reset(self):
+        self._x0_self = None
+
+    def forward(self, x, t, **kwargs):
+        from dimol.training.distributed import unwrap_model
+
+        raw = unwrap_model(self.eps_model)
+        alpha_t = torch.clamp(self.path.alpha(t), min=1e-3)
+        beta_t = torch.clamp(self.path.beta(t), min=1e-3)
+        t_in = t.squeeze(-1)
+
+        shared = dict(kwargs)
+        if getattr(raw, "self_conditioning", False):
+            shared["x0_self"] = self._x0_self
+        if getattr(raw, "length_conditioning", False) and self.length is not None:
+            shared["length"] = self.length
+
+        conditional = self.eps_model(x, t_in, text=self.text,
+                                     text_mask=self.text_mask, **shared)
+        if self.scale == 0.0:
+            pred = conditional
+        else:
+            # the same weights with every caption token masked: the unconditional score
+            empty = torch.zeros_like(self.text_mask)
+            unconditional = self.eps_model(x, t_in, text=self.text,
+                                           text_mask=empty, **shared)
+            pred = unconditional + (1.0 + self.scale) * (conditional - unconditional)
+
+        if self.regime == "epsilon":
+            x0_pred = (x - beta_t * pred) / alpha_t
+        elif self.regime == "x":
+            x0_pred = pred
+        else:
+            raise ValueError(f"Expected regime 'epsilon' or 'x', got {self.regime}")
+
+        self._x0_self = x0_pred.detach()
+        return (alpha_t * x0_pred - x) / (beta_t ** 2)
