@@ -106,6 +106,25 @@ def stage_generate(args) -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "reference.txt").write_text("\n".join(references) + "\n")
 
+    predicted_lengths = None
+    if args.length_head is not None:
+        from dimol.models.length_head import LengthHead
+
+        head = LengthHead.load(args.length_head, map_location=device).to(device)
+        chunks = []
+        with torch.no_grad():
+            for start in range(0, n, 256):
+                stop = min(start + 256, n)  # the arrays hold the whole split, not just n
+                t = torch.from_numpy(np.asarray(text[start:stop],
+                                                dtype=np.float32)).to(device)
+                m = torch.from_numpy(np.asarray(text_mask[start:stop])
+                                     .astype(bool)).to(device)
+                chunks.append(head.predict(t, m, args.length_temperature).cpu())
+        predicted_lengths = torch.cat(chunks).numpy()
+        true_lengths = np.asarray(masks[:n]).sum(1)
+        print(f"  length head: MAE {np.abs(predicted_lengths - true_lengths).mean():.2f} "
+              f"tokens on these captions")
+
     caption_index = np.arange(n)
     if args.shuffle_captions:
         caption_index = np.roll(caption_index, n // 2)
@@ -118,13 +137,15 @@ def stage_generate(args) -> None:
             text=np.asarray(text[:n], dtype=np.float32)[caption_index],
             text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
-            length_prior=np.asarray(masks[:n]).sum(1),
-            length_exact=bool(args.oracle_length),
+            length_prior=(predicted_lengths if predicted_lengths is not None
+                          else np.asarray(masks[:n]).sum(1)),
+            length_exact=bool(args.oracle_length) or predicted_lengths is not None,
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
         name = (f"guidance_{scale}"
                 + ("_shuffled" if args.shuffle_captions else "")
-                + ("_oraclelen" if args.oracle_length else ""))
+                + ("_oraclelen" if args.oracle_length else "")
+                + ("_headlen" if args.length_head is not None else ""))
         (args.out / f"{name}.txt").write_text("\n".join(generated) + "\n")
         ok = sum(grammatical(s) for s in generated)
         f1 = float(np.mean([token_f1(g, r, tokenizer)
@@ -193,6 +214,12 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--length-head", type=Path, default=None,
+                        help="predict each molecule's length from its caption with this "
+                             "head, instead of drawing a length from the corpus. This is "
+                             "the honest version of --oracle-length")
+    parser.add_argument("--length-temperature", type=float, default=0.0,
+                        help="0 takes the head's most likely length, above 0 samples")
     parser.add_argument("--oracle-length", action="store_true",
                         help="give each sample the reference molecule's own length. An "
                              "upper bound, not a result: a real system would have to "

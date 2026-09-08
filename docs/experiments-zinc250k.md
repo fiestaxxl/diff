@@ -1021,3 +1021,54 @@ smaller job than anything else on the list.
 Published MolT5-large on this benchmark is about 96% validity, 31% exact match and 0.83
 MACCS, so the gap is still wide. What has changed is that it is now itemised: the run was
 too short, the caption's length information is unused, and the text encoder is frozen.
+
+## Should the length input be dropped in favour of text alone? No: predict it
+
+The suspicion was reasonable. The length is given from ground truth during training, so
+the model could learn to lean on it and never extract size from the caption, and then
+obey a randomly drawn length at generation time. Crossing the two inputs settles it.
+
+| caption | length | validity | exact | MACCS | RDK | Morgan |
+|---|---|---|---|---|---|---|
+| right | drawn from corpus | 69.6% | 0% | 0.509 | 0.270 | 0.219 |
+| right | true (oracle) | 72.6% | 2.0% | 0.615 | 0.416 | 0.326 |
+| shuffled | drawn from corpus | 69.2% | 0% | 0.270 | 0.143 | 0.083 |
+| shuffled | true (oracle) | 71.6% | 0.4% | 0.296 | 0.175 | 0.101 |
+
+The caption is worth +0.24 to +0.32 MACCS; the length is worth +0.11 with a correct
+caption and +0.03 with a wrong one. A shortcut would look the opposite way round: the true
+length with a wrong caption would score well, and it scores 0.296 against a 0.270 floor.
+So the two inputs are complementary rather than competing, and the length carries almost
+no structure of its own - it constrains the realisation of a structure the caption has
+already specified.
+
+### The head
+
+`dimol/models/length_head.py` attention-pools the frozen caption states and classifies the
+length over the canvas, with neighbouring lengths given partial credit because being one
+token out is nearly right. Twelve epochs, two minutes:
+
+| predictor | MAE on val |
+|---|---|
+| the corpus mean | 18.91 tokens |
+| ridge on mean-pooled states | 9.03 |
+| **this head** | **7.77** (43% within three tokens, 12.5% exact) |
+
+And end to end, on the same 500 captions:
+
+| length source | validity | exact | MACCS | RDK | Morgan | token F1 |
+|---|---|---|---|---|---|---|
+| drawn from the corpus | 69.6% | 0.00% | 0.509 | 0.270 | 0.219 | 0.456 |
+| **predicted from the caption** | **74.8%** | **0.80%** | **0.588** | **0.389** | **0.289** | 0.601 |
+| true length (oracle) | 72.6% | 2.00% | 0.615 | 0.416 | 0.326 | 0.657 |
+
+The head recovers 75% of the oracle gain on MACCS, 82% on RDK and 65% on Morgan, and it
+beats the oracle on validity, 74.8% against 72.6%, presumably because it predicts slightly
+short and short molecules are easier to get right. It was still improving when training
+stopped at twelve epochs.
+
+So the design is: keep the length input, predict it from the caption, and the answer to
+"rely on text alone" is that this *is* relying on text - the length now comes from the
+caption too, through a two-minute head rather than through the diffusion model's own
+capacity. A control run with the length input removed entirely is queued behind the
+current sweep, because the reasoning above deserves a measurement of its own.

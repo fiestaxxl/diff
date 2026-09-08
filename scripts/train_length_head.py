@@ -25,9 +25,16 @@ from dimol.models.length_head import LengthHead, length_loss  # noqa: E402
 
 
 def load_split(data_dir: Path, split: str):
-    text = np.load(data_dir / f"{split}_text.npy", mmap_mode="r")
-    mask = np.load(data_dir / f"{split}_text_mask.npy", mmap_mode="r")
-    lengths = np.load(data_dir / f"{split}_attn_mask_00000.npy", mmap_mode="r").sum(1)
+    """Read the caption states into memory, not as a memmap.
+
+    The head reads the whole split once per epoch in shuffled order, and random access
+    over a 5 GB memmap on NFS makes that unusably slow: the first attempt produced no
+    output at all. The array is 5 GB and the machine has over a terabyte free.
+    """
+    text = np.load(data_dir / f"{split}_text.npy")
+    mask = np.load(data_dir / f"{split}_text_mask.npy")
+    lengths = np.load(data_dir / f"{split}_attn_mask_00000.npy").sum(1)
+    print(f"  loaded {split}: {text.nbytes / 1e9:.1f} GB of caption states")
     return text, mask, np.asarray(lengths, dtype=np.int64)
 
 
