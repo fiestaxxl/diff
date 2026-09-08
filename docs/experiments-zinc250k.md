@@ -921,3 +921,40 @@ batch has to be part of the size ladder, not a constant.
 **And 60% usable molecules per attempt, without any conditioning**, is the number to carry
 into the comparison with published work: 61 to 64% validity, 100% uniqueness, 100%
 novelty, at 47.9M parameters. The reference this study started from produced 5.5%.
+
+## Text guidance on ChEBI-20: the first end-to-end number
+
+The 47.9M ZINC-20 model, vocabulary grown 448 to 640 and canvas 64 to 128, with
+zero-initialised cross-attention into frozen SciBERT states, fine-tuned for 60 epochs on
+25,574 caption-molecule pairs with 10% caption dropout. Nine minutes of training. 500
+validation captions, one molecule generated per caption, strict decoding with closing
+repair.
+
+| setting | validity | exact match | MACCS | RDK | Morgan | token F1 |
+|---|---|---|---|---|---|---|
+| guidance 0 | 63.4% | 0.00% | 0.331 | 0.169 | 0.122 | 0.377 |
+| guidance 1 | 56.8% | 0.00% | 0.346 | 0.170 | 0.138 | 0.375 |
+| guidance 3 | 63.2% | 0.00% | **0.368** | 0.190 | 0.150 | 0.373 |
+| guidance 3, captions shuffled | 59.2% | 0.00% | 0.246 | 0.118 | 0.079 | 0.287 |
+| MolT5-large, published | ~96% | ~31% | ~0.83 | ~0.75 | ~0.68 | - |
+
+Two things are established and one is not.
+
+The mechanism works. Guidance moves the fingerprint similarities monotonically, 0.331 to
+0.346 to 0.368 on MACCS, which is what classifier-free guidance is supposed to do. And the
+shuffled-caption control separates weak conditioning from none: pairing every molecule
+with another one's caption costs a third of the MACCS similarity and nearly half the
+Morgan, so the caption is being read. Without that control the numbers would be
+uninterpretable, because a model that ignored the text entirely would still score around
+0.25 by producing generically ChEBI-like molecules.
+
+What is not established is any claim of competitiveness. MACCS 0.37 against a published
+0.83, and exact match zero against 0.31, is a wide gap, and the reasons are not mysterious:
+the backbone barely moved in nine minutes at a peak learning rate of 3e-4, the text
+encoder is frozen, and only the grafted cross-attention learned anything. The two learning
+rates tried were indistinguishable on loss, which says the run was too short to separate
+them rather than that they are equivalent.
+
+The cost of a run being nine minutes is the useful fact here. The next step is not a new
+idea but a proper budget: longer schedules, higher peak rates, and unfreezing the encoder,
+measured against the shuffled-caption floor each time.

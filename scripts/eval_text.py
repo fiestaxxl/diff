@@ -106,17 +106,22 @@ def stage_generate(args) -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "reference.txt").write_text("\n".join(references) + "\n")
 
+    caption_index = np.arange(n)
+    if args.shuffle_captions:
+        caption_index = np.roll(caption_index, n // 2)
+        print("  captions shuffled: every molecule is paired with another one's caption")
+
     for scale in args.guidance:
         params = SamplingParams(
             num_samples=n, batch_size=args.batch_size, num_timesteps=args.steps,
             decode="grammar_close", strict=True, seed=args.seed,
-            text=np.asarray(text[:n], dtype=np.float32),
-            text_mask=np.asarray(text_mask[:n]).astype(bool),
+            text=np.asarray(text[:n], dtype=np.float32)[caption_index],
+            text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
             length_prior=np.asarray(masks[:n]).sum(1),
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
-        name = f"guidance_{scale}"
+        name = f"guidance_{scale}" + ("_shuffled" if args.shuffle_captions else "")
         (args.out / f"{name}.txt").write_text("\n".join(generated) + "\n")
         ok = sum(grammatical(s) for s in generated)
         f1 = float(np.mean([token_f1(g, r, tokenizer)
@@ -185,6 +190,10 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--shuffle-captions", action="store_true",
+                        help="pair every molecule with somebody else's caption. The "
+                             "control that separates weak conditioning from none: if the "
+                             "metrics do not fall, the text path is decorative")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--dir", type=Path)
     args = parser.parse_args()
