@@ -1,128 +1,107 @@
-"""Length conditioning: the model reads it, training supplies it, sampling requires it."""
+"""The caption-to-length head: shape, masking, sampling, and the smoothed loss."""
 from __future__ import annotations
 
-import numpy as np
 import pytest
 import torch
 
-from dimol.diffusion.conditionals import CosineAlpha, CosineBeta
-from dimol.diffusion.paths import GaussianConditionalProbabilityPath
-from dimol.models.denoiser import DenoiserModel
-from dimol.models.diffusion_transformer import DiffusionTransformer, TransformerConfig
-from dimol.training.tasks import DiffusionTask
+from dimol.models.length_head import LengthHead, length_loss
 
-SEQ_LEN = 12
-VOCAB = 64
+TEXT_DIM, TEXT_LEN, CANVAS = 32, 9, 64
 
 
-def _model(**flags) -> DiffusionTransformer:
-    return DiffusionTransformer(
-        TransformerConfig(model_dim=32, emb_dim=8, time_dim=32, num_heads=4,
-                          num_text_blocks=1, vocab_size=VOCAB, pad_idx=0,
-                          max_pos=SEQ_LEN + 4, **flags)
-    )
+def _inputs(batch: int = 4, real: int = 5):
+    text = torch.randn(batch, TEXT_LEN, TEXT_DIM)
+    mask = torch.zeros(batch, TEXT_LEN, dtype=torch.bool)
+    mask[:, :real] = True
+    return text, mask
 
 
-def _batch(batch_size: int = 4) -> dict:
-    ids = torch.randint(1, VOCAB, (batch_size, SEQ_LEN))
-    ids[:, -2:] = 0
-    return {"token_ids": ids, "attention_mask": ids != 0}
+def test_it_predicts_a_distribution_over_the_canvas():
+    head = LengthHead(TEXT_DIM, canvas=CANVAS)
+    logits = head(*_inputs())
+    assert logits.shape == (4, CANVAS + 1)
+    assert torch.isfinite(logits).all()
 
 
-def _task(**kwargs) -> DiffusionTask:
-    path = GaussianConditionalProbabilityPath(
-        p_simple_shape=[SEQ_LEN, 8], alpha=CosineAlpha("cpu"), beta=CosineBeta("cpu")
-    )
-    params = dict(pad_idx=0, lambda_grammar=0.0, grammar_enabled=False, seq_len=SEQ_LEN)
-    params.update(kwargs)
-    return DiffusionTask(path, **params)
-
-
-def test_the_length_embedding_starts_inert():
-    model = _model(length_conditioning=True)
-    assert torch.count_nonzero(model.length_embedding.weight) == 0
-    x, t = torch.randn(2, SEQ_LEN, 8), torch.full((2, 1), 0.5)
-    short = model(input_embeddings=x, time=t, length=torch.tensor([3, 3]))
-    long = model(input_embeddings=x, time=t, length=torch.tensor([11, 11]))
-    assert torch.allclose(short, long, atol=1e-6)
-
-
-def test_once_trained_the_length_changes_the_prediction():
-    """Both paths have to move: adaLN-Zero starts every modulation at zero, so the time
-    and length embeddings are inert until the modulation weights are trained."""
-    from dimol.models.layers import Modulation
-
-    model = _model(length_conditioning=True)
+def test_padded_caption_tokens_are_ignored():
+    head = LengthHead(TEXT_DIM, canvas=CANVAS).eval()
+    text, mask = _inputs(real=5)
+    other = text.clone()
+    other[:, 5:] = torch.randn_like(other[:, 5:])
     with torch.no_grad():
-        model.length_embedding.weight.normal_(std=0.5)
-        for module in model.modules():
-            if isinstance(module, Modulation):
-                module.out_layer.weight.normal_(std=0.1)
-    x, t = torch.randn(2, SEQ_LEN, 8), torch.full((2, 1), 0.5)
-    short = model(input_embeddings=x, time=t, length=torch.tensor([3, 3]))
-    long = model(input_embeddings=x, time=t, length=torch.tensor([11, 11]))
-    assert not torch.allclose(short, long, atol=1e-4)
+        assert torch.allclose(head(text, mask), head(other, mask), atol=1e-5)
 
 
-def test_a_conditioned_model_refuses_to_run_without_a_length():
-    model = _model(length_conditioning=True)
-    with pytest.raises(ValueError, match="no length was passed"):
-        model(input_embeddings=torch.randn(1, SEQ_LEN, 8), time=torch.zeros(1, 1))
+def test_the_mode_is_returned_at_temperature_zero():
+    head = LengthHead(TEXT_DIM, canvas=CANVAS).eval()
+    text, mask = _inputs()
+    with torch.no_grad():
+        assert torch.equal(head.predict(text, mask), head(text, mask).argmax(-1))
 
 
-def test_a_plain_model_refuses_a_length():
-    model = _model()
-    with pytest.raises(ValueError, match="length_conditioning is off"):
-        model(input_embeddings=torch.randn(1, SEQ_LEN, 8), time=torch.zeros(1, 1),
-              length=torch.tensor([4]))
-
-
-def test_training_takes_the_length_from_the_attention_mask():
+def test_sampling_varies_and_the_mode_does_not():
+    head = LengthHead(TEXT_DIM, canvas=CANVAS).eval()
+    text, mask = _inputs(batch=64)
     torch.manual_seed(0)
-    model, batch = _model(length_conditioning=True), _batch()
-    out = _task().compute_loss(model, batch)
-    assert torch.isfinite(out["loss"])
-    out["loss"].backward()
-    assert model.length_embedding.weight.grad is not None
+    a = head.predict(text, mask, temperature=1.0)
+    b = head.predict(text, mask, temperature=1.0)
+    assert not torch.equal(a, b)
+    assert torch.equal(head.predict(text, mask), head.predict(text, mask))
 
 
-def test_training_without_a_mask_is_reported():
-    model = _model(length_conditioning=True)
-    batch = {"token_ids": _batch()["token_ids"]}
-    with pytest.raises(ValueError, match="attention_mask"):
-        _task().compute_loss(model, batch)
+def test_predictions_stay_on_the_canvas():
+    head = LengthHead(TEXT_DIM, canvas=CANVAS).eval()
+    text, mask = _inputs(batch=32)
+    for temperature in (0.0, 1.0, 2.0):
+        pred = head.predict(text, mask, temperature=temperature)
+        assert int(pred.min()) >= 0 and int(pred.max()) <= CANVAS
 
 
-def test_length_and_self_conditioning_compose():
+def test_the_loss_gives_neighbours_partial_credit():
+    """Being one token out must cost less than being thirty out."""
+    logits = torch.zeros(1, CANVAS + 1)
+    target = torch.tensor([20])
+    near = torch.zeros(1, CANVAS + 1)
+    near[0, 21] = 10.0
+    far = torch.zeros(1, CANVAS + 1)
+    far[0, 50] = 10.0
+    assert length_loss(near, target) < length_loss(far, target)
+
+
+def test_the_loss_is_lowest_when_it_is_right():
+    target = torch.tensor([20])
+    right = torch.zeros(1, CANVAS + 1)
+    right[0, 20] = 10.0
+    near = torch.zeros(1, CANVAS + 1)
+    near[0, 21] = 10.0
+    assert length_loss(right, target) < length_loss(near, target)
+
+
+def test_it_trains_on_a_signal_it_can_learn():
+    """A length written into the caption states must be learnable."""
     torch.manual_seed(0)
-    model = _model(length_conditioning=True, self_conditioning=True)
-    out = _task(self_cond_prob=1.0).compute_loss(model, _batch())
-    assert torch.isfinite(out["loss"])
+    head = LengthHead(TEXT_DIM, canvas=CANVAS)
+    optimizer = torch.optim.AdamW(head.parameters(), lr=3e-3)
+    targets = torch.randint(5, 40, (128,))
+    text = torch.randn(128, TEXT_LEN, TEXT_DIM) * 0.1
+    text[:, 0, 0] = targets.float()  # the answer, in one coordinate
+    mask = torch.ones(128, TEXT_LEN, dtype=torch.bool)
+
+    first = length_loss(head(text, mask), targets).item()
+    for _ in range(120):
+        optimizer.zero_grad(set_to_none=True)
+        loss = length_loss(head(text, mask), targets)
+        loss.backward()
+        optimizer.step()
+    assert loss.item() < first * 0.7
 
 
-def test_the_denoiser_forwards_the_length_it_was_given():
-    path = GaussianConditionalProbabilityPath(
-        p_simple_shape=[SEQ_LEN, 8], alpha=CosineAlpha("cpu"), beta=CosineBeta("cpu")
-    )
-    wrapper = DenoiserModel(_model(length_conditioning=True), path)
-    wrapper.length = torch.tensor([5, 5])
-    out = wrapper(torch.randn(2, SEQ_LEN, 8), torch.full((2, 1, 1), 0.3))
-    assert torch.isfinite(out).all()
-
-
-def test_sampling_a_conditioned_model_without_a_prior_is_refused():
-    from dimol.eval.sampling import SamplingParams, sample_smiles
-
-    class StubTokenizer:
-        SPECIAL_TOKENS = ()
-        pad_id = bos_id = eos_id = unk_id = 0
-
-        def get_vocab(self):
-            return {"C": 1}
-
-    path = GaussianConditionalProbabilityPath(
-        p_simple_shape=[SEQ_LEN, 8], alpha=CosineAlpha("cpu"), beta=CosineBeta("cpu")
-    )
-    with pytest.raises(ValueError, match="length_prior"):
-        sample_smiles(_model(length_conditioning=True), path, StubTokenizer(),
-                      SamplingParams(num_samples=2), device="cpu")
+def test_it_survives_a_save_and_load(tmp_path):
+    head = LengthHead(TEXT_DIM, canvas=CANVAS).eval()
+    path = tmp_path / "head.pt"
+    head.save(path)
+    again = LengthHead.load(path)
+    text, mask = _inputs()
+    with torch.no_grad():
+        assert torch.allclose(head(text, mask), again(text, mask), atol=1e-6)
+    assert again.canvas == CANVAS
