@@ -1,5 +1,6 @@
 
 from dimol.models.layers import (
+    MultiheadCrossAttention,
     Modulation,
     OutLayer,
     RoPE1D,
@@ -59,6 +60,13 @@ class TransformerConfig:
     # length as an input, embedded like the timestep and added to it, so the plan is
     # conditioned on it. The embedding starts at zero, so a fresh model is unchanged.
     length_conditioning: bool = False
+
+    # ---- text conditioning ----
+    # Width of the frozen text encoding, 768 for SciBERT. Zero means no text path and no
+    # extra parameters at all. When set, every block gains a cross-attention whose output
+    # projection is zeroed, so a checkpoint grown into this shape behaves exactly as it
+    # did before the layers existed.
+    text_dim: int = 0
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -159,6 +167,12 @@ class DiffusionTransformer(nn.Module):
         for m in self.modules():
             if isinstance(m, Modulation):
                 nn.init.zeros_(m.out_layer.weight)
+        # the text path starts inert, which is what makes grafting it onto a pretrained
+        # model safe: the first forward is identical with and without a caption
+        for m in self.modules():
+            if isinstance(m, MultiheadCrossAttention):
+                nn.init.zeros_(m.out_layer.weight)
+                nn.init.zeros_(m.out_layer.bias)
 
     def forward(
         self,
@@ -167,6 +181,8 @@ class DiffusionTransformer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         x0_self: Optional[torch.Tensor] = None,  # previous x0 estimate, (B, T, C)
         length: Optional[torch.Tensor] = None,   # non-padding token count, (B,)
+        text: Optional[torch.Tensor] = None,     # frozen caption encoding, (B, S, text_dim)
+        text_mask: Optional[torch.Tensor] = None,  # (B, S), True where a token is real
     ):
         if self.self_conditioning:
             if x0_self is None:
@@ -202,9 +218,14 @@ class DiffusionTransformer(nn.Module):
         # rope = self.text_rope_embeddings(rope_pos)
         cos, sin = self.text_rope_embeddings(rope_pos)
  
+        if text is not None and not self.config.text_dim:
+            raise ValueError(
+                "a caption was passed but model.text_dim is 0; the model has no text path"
+            )
+
         for block in self.text_transformer_blocks:
-            # text_embed = block(text_embed, time_embed, rope, attention_mask)
-            text_embed = block(text_embed, time_embed, (cos, sin), attention_mask)
+            text_embed = block(text_embed, time_embed, (cos, sin), attention_mask,
+                               text=text, text_mask=text_mask)
  
 
         return self.noise_head(text_embed, time_embed)

@@ -198,6 +198,53 @@ class OutLayer(nn.Module):
         return (norm(x) * (scale + 1.0) + shift)
     
 
+class MultiheadCrossAttention(nn.Module):
+    """Attention from the molecule canvas into a frozen text encoding.
+
+    Text conditioning cannot ride on the adaLN vector the way the timestep and the length
+    do: a caption names specific substructures, so the canvas has to attend to individual
+    caption tokens rather than to one pooled summary. Queries come from the canvas, keys
+    and values from the caption; there is no RoPE on either side, because the two
+    sequences have no shared coordinate.
+
+    The output projection is zeroed at construction, exactly like the adaLN modulations,
+    so a model that gains these layers is bit-for-bit the model it was before until they
+    are trained. That is what makes it safe to graft them onto a pretrained checkpoint.
+    """
+
+    def __init__(self, config, text_dim: int):
+        super().__init__()
+        assert config.model_dim % config.num_heads == 0
+        self.config = config
+        self.n_head = config.num_heads
+        self.head_dim = config.model_dim // config.num_heads
+        self.to_q = nn.Linear(config.model_dim, config.model_dim, bias=True)
+        self.to_kv = nn.Linear(text_dim, 2 * config.model_dim, bias=True)
+        self.query_norm = nn.RMSNorm(self.head_dim)
+        self.key_norm = nn.RMSNorm(self.head_dim)
+        self.out_layer = nn.Linear(config.model_dim, config.model_dim, bias=True)
+
+    def forward(self, x, text, text_mask=None):
+        B, T, C = x.size()
+        S = text.size(1)
+        q = self.to_q(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k, v = self.to_kv(text).split(C, dim=2)
+        k = k.view(B, S, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(B, S, self.n_head, self.head_dim).transpose(1, 2)
+        q = self.query_norm(q.float()).type_as(q)
+        k = self.key_norm(k.float()).type_as(k)
+
+        mask = None
+        if text_mask is not None:
+            # (B, S) of True where a caption token is real -> (B, 1, 1, S)
+            mask = text_mask.bool()[:, None, None, :]
+        out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask,
+            dropout_p=(self.config.attn_dropout if self.training else 0.0))
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_layer(out)
+
+
 class TransformerEncoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -206,6 +253,13 @@ class TransformerEncoderBlock(nn.Module):
         self.self_attention_norm = nn.LayerNorm(config.model_dim, elementwise_affine=False)
         self.self_attention = MultiheadSelfAttention(config)
 
+        text_dim = int(getattr(config, "text_dim", 0) or 0)
+        self.cross_attention = None
+        if text_dim:
+            self.cross_attention_norm = nn.LayerNorm(config.model_dim,
+                                                     elementwise_affine=False)
+            self.cross_attention = MultiheadCrossAttention(config, text_dim)
+
         self.feed_forward_norm = nn.LayerNorm(config.model_dim, elementwise_affine=False)
         self.feed_forward = FeedForward(config)
 
@@ -213,13 +267,18 @@ class TransformerEncoderBlock(nn.Module):
     def _gate_sum(x, out, gate):
         return x + gate[:, None, :] * out
 
-    def forward(self, x, time_embed, rope, attention_mask=None):
+    def forward(self, x, time_embed, rope, attention_mask=None,
+                text=None, text_mask=None):
         self_attn_params, ff_params = torch.chunk(self.text_modulation(time_embed), 2, dim=-1)
 
         shift, scale, gate = torch.chunk(self_attn_params, 3, dim=-1)
         out = self.apply_scale_shift_norm(self.self_attention_norm, x, scale[:, None, :], shift[:, None, :])
         out = self.self_attention(out, rope, attention_mask)
         x = self._gate_sum(x, out, gate)
+
+        if self.cross_attention is not None and text is not None:
+            # ungated: the output projection starts at zero, which is the gate
+            x = x + self.cross_attention(self.cross_attention_norm(x), text, text_mask)
 
         shift, scale, gate = torch.chunk(ff_params, 3, dim=-1)
         out = self.apply_scale_shift_norm(self.feed_forward_norm, x, scale[:, None, :], shift[:, None, :])
