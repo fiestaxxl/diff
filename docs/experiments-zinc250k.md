@@ -958,3 +958,66 @@ them rather than that they are equivalent.
 The cost of a run being nine minutes is the useful fact here. The next step is not a new
 idea but a proper budget: longer schedules, higher peak rates, and unfreezing the encoder,
 measured against the shuffled-caption floor each time.
+
+## Text guidance given real time, and where the gap actually is
+
+Same setup, 60,000 steps instead of 6,000, three learning rates. 500 validation captions,
+one molecule per caption, strict decoding with closing repair.
+
+| run | step | validity | exact | MACCS | RDK | Morgan |
+|---|---|---|---|---|---|---|
+| lr 3e-4 | 5,000 | 50.2% | 0% | 0.371 | 0.193 | 0.148 |
+| lr 3e-4 | 20,000 | 64.2% | 0% | 0.474 | 0.245 | 0.186 |
+| lr 3e-4 | 40,000 | 67.2% | 0% | 0.509 | 0.276 | 0.214 |
+| lr 3e-4 | 60,000 | **69.2%** | 0% | **0.518** | 0.286 | 0.219 |
+| lr 1e-3 | 60,000 | 7.8% | 0% | 0.144 | 0.070 | 0.052 |
+| lr 3e-3 | 60,000 | 16.8% | 0% | 0.129 | 0.039 | 0.039 |
+
+**The final training losses of those three runs were 0.8976, 0.8956 and 0.8954.** The
+lowest loss belongs to the model that scores 0.129 on the task and the highest to the one
+that scores 0.518. This is the sharpest form the loss-blindness result has taken anywhere
+in this study: a fourfold quality difference, ranked backwards, at a loss spread of 0.2%.
+Anything that selects a checkpoint or a hyperparameter by loss here selects the worst
+model on offer.
+
+At 3e-4 the curve is monotone and still rising at 60k, so the run was too short rather
+than converged.
+
+### Guidance, and the floor it should be quoted against
+
+On the best checkpoint:
+
+| setting | validity | exact | MACCS | RDK | Morgan | token F1 |
+|---|---|---|---|---|---|---|
+| guidance 0 | 69.6% | 0% | 0.509 | 0.270 | 0.219 | 0.456 |
+| guidance 3 | 69.8% | 0% | 0.509 | 0.279 | 0.220 | 0.449 |
+| guidance 6 | 65.6% | 0% | 0.499 | 0.271 | 0.202 | 0.442 |
+| guidance 10 | 60.6% | 0% | 0.460 | 0.239 | 0.174 | 0.418 |
+| captions shuffled | 69.2% | 0% | **0.270** | 0.143 | 0.083 | 0.310 |
+| **reference length given** | 72.6% | **2.0%** | **0.615** | **0.416** | **0.326** | 0.657 |
+
+Guidance has stopped helping. At nine minutes of training it was worth 11% on MACCS;
+now scale 0 and scale 3 are identical and anything higher costs quality. That is what
+guidance is for: it amplifies a conditioning signal that the model is underusing, and
+once the conditioning is trained there is nothing left to amplify. Worth remembering
+before reaching for it as a free win.
+
+The signal against its own floor has doubled: 0.509 against a shuffled-caption 0.270,
+where the nine-minute model was 0.368 against 0.246.
+
+### The length is a fifth of the remaining gap
+
+The last row is an oracle, not a result: each molecule was generated at its reference's
+own token length instead of a length drawn from the corpus. Knowing the length alone is
+worth 21% on MACCS, 49% on RDK, 48% on Morgan, and it is the difference between zero and
+two percent exact match.
+
+That is not a benchmark number, but it is a design instruction. A caption very often says
+how large the molecule is, sometimes literally ("N-nonacosanoyl" is twenty-nine carbons),
+and the model already takes a length as an input. A head predicting length from the frozen
+caption states would convert most of that oracle gain into a real one, and it is a much
+smaller job than anything else on the list.
+
+Published MolT5-large on this benchmark is about 96% validity, 31% exact match and 0.83
+MACCS, so the gap is still wide. What has changed is that it is now itemised: the run was
+too short, the caption's length information is unused, and the text encoder is frozen.
