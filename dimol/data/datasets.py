@@ -163,7 +163,27 @@ class PairedSmilesTextDataset(SmilesDataset):
         how = "r" if mmap else None
         self.text = np.load(text_path, mmap_mode=how)
         self.text_mask = np.load(mask_path, mmap_mode=how)
-        if len(self.text) != self.num_samples:
+
+        # Augmented splits hold several spellings of the same molecule, all sharing one
+        # caption. Repeating the caption states would mean 50 GB for ten spellings of
+        # ChEBI-20, so an index maps molecule row -> caption row instead. Without the
+        # index file the arrays must be one-to-one, as they were before.
+        index_path = directory / f"{split}_text_index.npy"
+        self.text_index = None
+        if index_path.exists():
+            self.text_index = np.load(index_path)
+            if len(self.text_index) != self.num_samples:
+                raise ValueError(
+                    f"split {split!r}: {self.num_samples} molecules but "
+                    f"{len(self.text_index)} rows in {index_path.name}"
+                )
+            largest = int(self.text_index.max()) if self.num_samples else -1
+            if largest >= len(self.text):
+                raise ValueError(
+                    f"split {split!r}: {index_path.name} points at caption row "
+                    f"{largest} but only {len(self.text)} captions exist"
+                )
+        elif len(self.text) != self.num_samples:
             raise ValueError(
                 f"split {split!r}: {self.num_samples} molecules but {len(self.text)} "
                 "captions; the arrays are not aligned"
@@ -173,8 +193,9 @@ class PairedSmilesTextDataset(SmilesDataset):
         item = super().__getitem__(idx)
         if idx < 0:
             idx += self.num_samples
-        item["text"] = torch.from_numpy(np.asarray(self.text[idx], dtype=np.float32))
-        item["text_mask"] = torch.from_numpy(np.asarray(self.text_mask[idx], dtype=bool))
+        row = int(self.text_index[idx]) if self.text_index is not None else idx
+        item["text"] = torch.from_numpy(np.asarray(self.text[row], dtype=np.float32))
+        item["text_mask"] = torch.from_numpy(np.asarray(self.text_mask[row], dtype=bool))
         return item
 
 
