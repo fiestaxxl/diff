@@ -277,7 +277,23 @@ class DiffusionTask(Task):
             token_embeddings, token_ids, embed
         ) * self.x0_noise_std
 
-        batch_size, seq_len, emb_dim = x0.shape
+        # The content channel, when the model has one: positive where the molecule
+        # continues, negative past its end, diffused jointly with the embedding channels.
+        # It is scaled to the embedding table's own per-element RMS because that table
+        # grows about fiftyfold over a run, and a fixed +/-1 would start commensurate and
+        # end negligible — the channel would quietly stop mattering as training went on.
+        content_target = None
+        if getattr(raw, "content_channel", False):
+            if pad_mask is None:
+                raise ValueError(
+                    "model.content_channel needs 'attention_mask' in the batch: the "
+                    "channel's target is which positions hold content"
+                )
+            scale = token_embeddings.detach().pow(2).mean().sqrt().clamp(min=1e-6)
+            content_target = (pad_mask.to(x0.dtype) * 2.0 - 1.0).unsqueeze(-1) * scale
+            x0 = torch.cat((x0, content_target), dim=-1)
+
+        batch_size, seq_len, latent_dim = x0.shape
 
         t = self._sample_time(batch_size, token_ids.device)
 
@@ -395,6 +411,11 @@ class DiffusionTask(Task):
         else:
             x0_hat = eps_theta  # (B, L, C)
 
+        # The token-level terms below read the embedding channels only: the content
+        # channel is not a token and the readout has no row for it.
+        if content_target is not None:
+            x0_hat = x0_hat[..., : token_embeddings.shape[-1]]
+
         # ----- Reconstruction MSE (only at low-noise / high-alpha steps) -----
         alpha_for_gate = alpha.squeeze(-1).squeeze(-1)  # (B,)
         mse_t0_sample_mask = self._gate(alpha_for_gate, self.mse_t0_alpha_threshold)  # (B,)
@@ -414,7 +435,11 @@ class DiffusionTask(Task):
         # latents, so it only has to invert the embedding table it owns, and at sampling
         # time it is fed the SDE output instead. ce_input="x0_hat" trains it on what it
         # will actually see and sends the gradient through the denoiser.
-        logits = get_logits(x0 if self.ce_input == "x0" else x0_hat)  # (B, L, V)
+        # x0 carries the content channel when the model has one; the readout does not
+        # know about it, so the token terms see the embedding channels only. x0_hat was
+        # already narrowed above.
+        x0_tokens = x0 if content_target is None else x0[..., : token_embeddings.shape[-1]]
+        logits = get_logits(x0_tokens if self.ce_input == "x0" else x0_hat)  # (B, L, V)
 
         ce_sample_mask = self._gate(alpha_for_gate, self.ce_alpha_threshold)  # (B,)
 

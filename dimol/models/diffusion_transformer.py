@@ -76,6 +76,21 @@ class TransformerConfig:
     # The projection is zero-initialised, so a model that has it behaves exactly as one
     # that does not until training moves it.
     text_global: bool = False
+
+    # ---- content channel ----
+    # The diffusion carries no representation of where the molecule ends. Measured
+    # directly: with the canvas left unpinned, the tail latent sits about 0.08 from the
+    # padding embedding and the same distance from the nearest real token, and that
+    # profile is identical whether or not the readout was trained on padding. The model
+    # appears to stop only because the length reaches the readout through adaLN.
+    #
+    # This adds one channel to the latent, diffused jointly with the embedding channels:
+    # positive where content continues, negative where the molecule has ended. Termination
+    # becomes something the model generates and can revise at every solver step, rather
+    # than a number handed to it. The embedding table, the readout and the vocabulary are
+    # untouched, so no checkpoint surgery is needed: the extra input column is zeroed, and
+    # a model with the flag off is bit-identical to one from before it existed.
+    content_channel: bool = False
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -113,8 +128,14 @@ class DiffusionTransformer(nn.Module):
 
         self.token_embedding = nn.Embedding(config.vocab_size, config.emb_dim, padding_idx=config.pad_idx)
         self.self_conditioning = bool(getattr(config, "self_conditioning", False))
-        in_dim = config.emb_dim * (2 if self.self_conditioning else 1)
+        self.content_channel = bool(getattr(config, "content_channel", False))
+        # The latent is the embedding channels plus, optionally, the content channel;
+        # self-conditioning doubles whatever that is.
+        self.latent_dim = config.emb_dim + (1 if self.content_channel else 0)
+        in_dim = self.latent_dim * (2 if self.self_conditioning else 1)
         self.up_proj = nn.Linear(in_dim, config.model_dim)
+        if self.content_channel:
+            self.content_head = nn.Linear(config.model_dim, 1)
 
         self.time_embeddings = TimeEmbeddings(config)
         self.length_conditioning = bool(getattr(config, "length_conditioning", False))
@@ -150,6 +171,15 @@ class DiffusionTransformer(nn.Module):
             with torch.no_grad():
                 self.text_global_proj.weight.zero_()
                 self.text_global_proj.bias.zero_()
+        if self.content_channel:
+            with torch.no_grad():
+                # Zero the columns that read the content channel, so a checkpoint grown
+                # into this shape starts out ignoring it. Gradients still reach them, and
+                # the head predicting the channel is zeroed for the same reason: its
+                # target is real noise, so it learns from the first step regardless.
+                self._zero_content_input_columns()
+                self.content_head.weight.zero_()
+                self.content_head.bias.zero_()
         if self.length_conditioning:
             with torch.no_grad():
                 self.length_embedding.weight.zero_()
@@ -196,6 +226,13 @@ class DiffusionTransformer(nn.Module):
             if isinstance(m, MultiheadCrossAttention):
                 nn.init.zeros_(m.out_layer.weight)
                 nn.init.zeros_(m.out_layer.bias)
+
+    def _zero_content_input_columns(self) -> None:
+        """Zero the up_proj columns fed by the content channel, in both latent copies."""
+        emb = self.config.emb_dim
+        self.up_proj.weight[:, emb].zero_()
+        if self.self_conditioning:
+            self.up_proj.weight[:, self.latent_dim + emb].zero_()
 
     def forward(
         self,
@@ -260,7 +297,10 @@ class DiffusionTransformer(nn.Module):
                                text=text, text_mask=text_mask)
  
 
-        return self.noise_head(text_embed, time_embed)
+        prediction = self.noise_head(text_embed, time_embed)
+        if self.content_channel:
+            prediction = torch.cat((prediction, self.content_head(text_embed)), dim=-1)
+        return prediction
 
     # -------- save / load --------
     def save_model(self, save_dir: str | Path) -> None:
