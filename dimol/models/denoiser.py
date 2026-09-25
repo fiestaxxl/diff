@@ -23,6 +23,10 @@ class DenoiserModel(nn.Module):
         self.regime = regime
         self._x0_self = None
         self.length = None  # set by the sampler when the model is length-conditioned
+        # A second-order solver evaluates the model twice per step, the second time at a
+        # point it may discard. That call must read the carry and must not write it, or
+        # the next accepted step is self-conditioned on an off-trajectory estimate.
+        self.freeze_carry = False
 
     def reset(self):
         self._x0_self = None
@@ -47,7 +51,8 @@ class DenoiserModel(nn.Module):
         else:
             raise ValueError(f"Expected regime to be 'epsilon' or 'x', got {self.regime}")
 
-        self._x0_self = x0_pred.detach()
+        if not self.freeze_carry:
+            self._x0_self = x0_pred.detach()
         score = (alpha_t * x0_pred - x) / (beta_t ** 2)
         return score
 

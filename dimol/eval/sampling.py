@@ -41,7 +41,7 @@ from typing import Any, List, Optional
 import torch
 
 from dimol.diffusion.diff_eqs import LearnedScoreSDE
-from dimol.diffusion.simulators import EulerMaruyamaSimulator
+from dimol.diffusion.simulators import EulerMaruyamaSimulator, HeunSimulator
 from dimol.models.denoiser import (
     ClampedDenoiserModel,
     DenoiserModel,
@@ -79,6 +79,12 @@ class SamplingParams:
     refine_rounds: int = 0        # extra denoise-renoise cycles after the trajectory
     refine_t: float = 0.9         # how far back each cycle re-noises to
     refine_steps: int = 20        # solver steps per cycle
+    solver: str = "euler_maruyama"  # euler_maruyama | heun. heun re-averages the drift
+                                  # at the end of each step, holding the same noise
+                                  # increment: second order in the drift for two model
+                                  # evaluations per step, so N heun steps cost 2N euler
+                                  # ones. Integrates the same SDE; nothing about the
+                                  # path, the parameterisation or the loss changes
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
 
@@ -172,7 +178,17 @@ def sample_smiles(
     else:
         score_model = DenoiserModel(model, path, regime=params.regime)
     sde = LearnedScoreSDE(path, score_model, params.variance)
-    simulator = EulerMaruyamaSimulator(sde)
+    if params.solver == "heun":
+        # The carry lives on the wrapper, and only DenoiserModel has one to protect.
+        carrier = score_model if isinstance(score_model, DenoiserModel) else None
+        simulator = HeunSimulator(sde, denoiser=carrier)
+    elif params.solver == "euler_maruyama":
+        simulator = EulerMaruyamaSimulator(sde)
+    else:
+        raise ValueError(
+            f"sampling.solver={params.solver!r}; expected "
+            "'euler_maruyama' or 'heun'"
+        )
 
     canvas = path.p_simple.shape[0]
     pad_embedding = None

@@ -77,6 +77,56 @@ class EulerMaruyamaSimulator(Simulator):
         return xt + self.sde.drift_coefficient(xt,t, **kwargs) * h + self.sde.diffusion_coefficient(xt,t, **kwargs) * torch.sqrt(h) * torch.randn_like(xt)
 
 
+class HeunSimulator(Simulator):
+    """Stochastic Heun: one Euler-Maruyama step, then the drift re-averaged at its end.
+
+    Euler-Maruyama is first order, so its error per step is O(h^2) in the drift. On
+    ZINC-250k that did not bind: 100 steps matched 1000. On ChEBI it does — 300 steps beat
+    100 by 0.019 MACCS, while 600 added only 0.004 and cost 1.4 points of validity, which
+    is what a discretisation-limited sampler trading one error for another looks like.
+
+    The scheme is the standard stochastic Heun (as in EDM): the noise increment is drawn
+    once and held fixed while the drift is evaluated at both ends of the step, then
+    averaged. Holding the increment is what keeps the corrector a corrector rather than a
+    second, independent stochastic step.
+
+        d1 = drift(x, t)
+        x~ = x + d1*h + g*sqrt(h)*z
+        d2 = drift(x~, t+h)
+        x' = x + (d1 + d2)/2*h + g*sqrt(h)*z        # same z
+
+    Two model evaluations per step, so 150 Heun steps cost what 300 Euler steps cost.
+    The path, the parameterisation and the loss are untouched: this only changes how the
+    same reverse SDE is integrated.
+
+    Safe at this end of the path: the drift carries a 1/alpha term and alpha -> 1 towards
+    the data, so the corrector is evaluated where the coefficient is better behaved than
+    at the point the predictor started from.
+    """
+
+    def __init__(self, sde: SDE, denoiser=None):
+        self.sde = sde
+        # The self-conditioning carry lives on the denoiser wrapper. The corrector reads
+        # it and must not overwrite it; see DenoiserModel.freeze_carry.
+        self.denoiser = denoiser
+
+    def step(self, xt: torch.Tensor, t: torch.Tensor, h: torch.Tensor, **kwargs):
+        d1 = self.sde.drift_coefficient(xt, t, **kwargs)
+        g = self.sde.diffusion_coefficient(xt, t, **kwargs)
+        increment = g * torch.sqrt(h) * torch.randn_like(xt)
+        euler = xt + d1 * h + increment
+
+        frozen = self.denoiser is not None
+        if frozen:
+            self.denoiser.freeze_carry = True
+        try:
+            d2 = self.sde.drift_coefficient(euler, t + h, **kwargs)
+        finally:
+            if frozen:
+                self.denoiser.freeze_carry = False
+        return xt + 0.5 * (d1 + d2) * h + increment
+
+
 class EulerMaruyamaSimulatorWithProjection(Simulator):
     def __init__(self, sde: SDE):
         self.sde = sde
