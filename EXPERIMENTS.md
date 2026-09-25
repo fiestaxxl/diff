@@ -250,8 +250,8 @@ readout**, which is where the architectural work should point.
 
 ### Why augmentation hurts
 
-All three completed arms agree, and neither the canonical/random split nor 10 vs 20
-spellings made a difference:
+All four arms agree, and neither the canonical/random split nor 10 vs 20 spellings made a
+difference:
 
 | | BLEU | Exact | Leven | MACCS | FCD | Validity |
 |---|---|---|---|---|---|---|
@@ -259,6 +259,7 @@ spellings made a difference:
 | 10 spellings, canonical included | 0.589 | 0.007 | 37.48 | 0.686 | 1.20 | 0.585 |
 | 10 spellings, all random | 0.579 | 0.007 | 38.07 | 0.686 | 1.26 | 0.607 |
 | 20 spellings, canonical included | 0.584 | 0.006 | 37.88 | 0.692 | 1.27 | 0.585 |
+| 20 spellings, all random | 0.580 | 0.007 | 37.96 | 0.679 | 1.31 | 0.595 |
 
 Augmentation adds no molecular information, only **multimodality in string space**. An
 autoregressive model picks one mode; a diffusion model on a continuous canvas has to spread
@@ -320,13 +321,53 @@ Full ChEBI-20 test split, 300 solver steps, guidance 0.
 | MolT5-Base | 0.769 | 0.081 | 24.46 | 0.721 | 0.588 | 0.529 | 2.18 | 0.772 |
 | TGM-DLM w/o corr | 0.828 | 0.242 | 16.90 | 0.874 | 0.771 | 0.722 | 0.89 | 0.789 |
 | TGM-DLM | 0.826 | 0.242 | 17.00 | 0.854 | 0.739 | 0.688 | 0.77 | 0.871 |
-| **ours (padding supervision + encoder length)** | 0.743 | 0.050 | **21.62** | **0.756** | 0.586 | 0.501 | **0.76** | 0.763 |
-| ours, base recipe, seed 43 / 44 | 0.726 / 0.726 | 0.045 / 0.044 | 23.17 / 22.68 | 0.747 / 0.753 | 0.576 / 0.580 | 0.488 / 0.490 | 0.82 / 0.82 | 0.753 / 0.750 |
+| **ours, padding supervision, mean of 3 seeds** | 0.737 | 0.050 | **21.69** | **0.755** | 0.585 | 0.501 | 0.81 | 0.763 |
+| ours, base recipe, mean of 2 seeds | 0.726 | 0.045 | 22.93 | 0.750 | 0.578 | 0.489 | 0.82 | 0.752 |
 
-**FCD 0.76 is first in the table.** Levenshtein and MACCS beat MolT5-Base. The gap that
-remains is concentrated in exact match and in the fine-grained fingerprints (RDK, Morgan) —
-the molecule is in the right class with the wrong details — which is what points at the
-frozen text encoder and the tokenizer as the next levers.
+**Our FCD is level with TGM-DLM** (0.81 against 0.77, and 0.76 on the luckiest of our
+seeds) and roughly three times better than MolT5-Base. Levenshtein and MACCS beat
+MolT5-Base. The gap that remains is concentrated in exact match and in the fine-grained
+fingerprints (RDK, Morgan) — the molecule is in the right class with the wrong details —
+which is what points at the frozen text encoder and the tokenizer as the next levers.
+
+An earlier version of this file claimed FCD 0.76 as first in the table. That was one seed.
+Across three, padding supervision gives 0.76 / 0.87 / 0.81 against the base recipe's
+0.82 / 0.82, so the effect on FCD is **not established** and the ranking claim is withdrawn.
+See the seeded table below.
+
+### Padding supervision, three seeds against two
+
+The project's rule is that the group's worst seed must beat the reference's best.
+
+| metric | cepad (3 seeds) | base (2 seeds) | Δ mean | verdict |
+|---|---|---|---|---|
+| BLEU | 0.743 / 0.736 / 0.731 | 0.726 / 0.726 | +0.011 | confirmed |
+| Exact | 0.050 / 0.052 / 0.048 | 0.045 / 0.044 | +0.005 | confirmed |
+| Levenshtein↓ | 21.62 / 21.73 / 21.73 | 23.17 / 22.68 | −1.23 | confirmed |
+| MACCS | 0.756 / 0.754 / 0.756 | 0.747 / 0.753 | +0.005 | confirmed, margin 0.001 |
+| RDK | 0.586 / 0.583 / 0.585 | 0.576 / 0.580 | +0.007 | confirmed |
+| Morgan | 0.501 / 0.498 / 0.503 | 0.488 / 0.490 | +0.012 | confirmed |
+| FCD↓ | 0.76 / 0.87 / 0.81 | 0.82 / 0.82 | −0.007 | **not established** |
+| Validity | 0.763 / 0.764 / 0.761 | 0.753 / 0.750 | +0.011 | confirmed |
+
+Seven metrics of eight, with a small and consistent effect. The MACCS margin is 0.001 and
+passes only because the cepad seeds happen to be tight (spread 0.002); it should be read as
+real but negligible. FCD has a seed spread of 0.110, which is larger than any difference
+between the groups, and is the reason the single-run claim was wrong.
+
+### Global caption conditioning: no effect
+
+`model.text_global`, one seed, against the three-seed cepad group it is built on:
+
+| | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| cepad, worst seed | 0.731 | 0.048 | 21.73 | 0.754 | 0.583 | 0.498 | 0.87 | 0.761 |
+| cepad + text_global | 0.735 | 0.043 | 22.00 | 0.748 | 0.574 | 0.487 | 0.79 | 0.768 |
+
+Below the group's worst seed on exact match, Levenshtein, MACCS, RDK and Morgan; above it on
+validity and FCD. Pooling the caption into the adaLN vector does not help, so the text
+pathway is not obviously capacity-limited in that direction, and the next text-side attempt
+should be the encoder itself rather than another route into the denoiser.
 
 ---
 
@@ -344,19 +385,19 @@ Kept here because each was stated with confidence before being measured properly
 | "Padding supervision is the first half of the termination fix" | the model learned to name padding and still cannot stop on its own |
 | "171M pretraining died from an external SIGKILL" | it was alive; concluded from a single 0%-utilisation sample |
 | "FCD is 2.20" | measured on 1000 captions, where the Fréchet estimate is biased upward. On the full test split, 1.23 |
+| "FCD 0.76, first in the table" | one seed. Across three: 0.76 / 0.87 / 0.81 against a base of 0.82 / 0.82. No effect on FCD, and no ranking claim |
 
 ---
 
-## Open — trained but never scored
+## Closed — the last four runs
 
-Four 200k-step runs completed and were never generated or evaluated. This is the cheapest
-outstanding work in the project.
+Four 200k-step runs sat trained but unscored for two weeks; all four are now measured.
 
 | Run | What it answers |
 |---|---|
-| `cepad_s43`, `cepad_s44` | whether padding supervision survives the three-seed rule |
-| `cepad_tglobal` | whether pooling the caption into the adaLN vector (a global conditioning path beside per-position cross-attention) helps |
-| `aug20_random` | the fourth corner of the augmentation grid |
+| `cepad_s43`, `cepad_s44` | **done** — padding supervision confirmed on 7 metrics of 8, FCD not established |
+| `cepad_tglobal` | **done** — no effect |
+| `aug20_random` | **done** — fourth corner agrees, augmentation is harmful |
 
 ## Open — not yet started, in priority order
 
@@ -365,10 +406,12 @@ outstanding work in the project.
    the frozen states lose length, they lose substructure detail too — which is exactly where
    RDK and Morgan fail. Needs the caption path rebuilt: token ids plus the encoder in the
    training loop with its own learning-rate multiplier.
-2. **A content channel in the latent.** The architectural answer to termination, now that it
-   is localised to latent generation rather than the readout: an extra channel denoised
+2. **A content channel in the latent.** Now the only architectural idea left standing:
+   `text_global` was tried and does nothing, so the next attempt should target latent
+   generation rather than another route into the denoiser. An extra channel denoised
    alongside the embedding that says "content continues here", so length emerges from the
-   model instead of being dictated to it.
+   model instead of being dictated to it — termination is localised to latent generation
+   rather than the readout, which padding supervision already ruled out.
 3. **A tokenizer trained on ZINC and ChEBI jointly.** Current merges are ZINC-shaped, and
    fine-grained substructure accuracy is what a poorly fitted tokenizer damages. Costs a
    fresh stage-1 pretrain.
