@@ -75,6 +75,13 @@ class SamplingParams:
                                   # drawing from it. Only honest when the length is known
                                   # or predicted; against a benchmark it is an oracle and
                                   # has to be labelled as one
+    pin_canvas: bool = True       # overwrite every position past the length with the
+                                  # padding embedding at each solver step. False still
+                                  # gives the model the length as an input but leaves the
+                                  # canvas alone, which is the only way to ask what the
+                                  # model does about termination by itself: with pinning
+                                  # on, the tail is padding by construction and any
+                                  # statistic about it is a tautology
     length_floor: bool = False    # also forbid stopping before the drawn length
     refine_rounds: int = 0        # extra denoise-renoise cycles after the trajectory
     refine_t: float = 0.9         # how far back each cycle re-noises to
@@ -140,7 +147,11 @@ def sample_smiles(
     tokenizer: Any,
     params: SamplingParams,
     device: str | torch.device,
+    latent_sink: Optional[list] = None,
 ) -> List[str]:
+    """Sample molecules. ``latent_sink``, if given, collects the final latent and the
+    readout logits of every batch, which is what termination analysis needs: the decoded
+    string says which token won, not how close the latent was to padding."""
     from dimol.eval.decoding import build_decoder
 
     raw = unwrap_model(model)
@@ -224,18 +235,19 @@ def sample_smiles(
             else:
                 lengths = _draw_lengths(params.length_prior, b, canvas, generator)
             drawn_lengths = lengths
-            positions = torch.arange(canvas).view(1, canvas)
-            known = (positions >= lengths.view(b, 1)).to(device)  # True where padding
-            known_mask = known.unsqueeze(-1)
-            pad_target = pad_embedding.view(1, 1, -1)
+            if params.pin_canvas:
+                positions = torch.arange(canvas).view(1, canvas)
+                known = (positions >= lengths.view(b, 1)).to(device)  # True where padding
+                known_mask = known.unsqueeze(-1)
+                pad_target = pad_embedding.view(1, 1, -1)
 
-            def on_step(state, t_next, _mask=known_mask, _pad=pad_target):
-                alpha, beta = path.alpha(t_next), path.beta(t_next)
-                noise = torch.randn_like(state)
-                conditional = alpha * _pad + beta * noise
-                return torch.where(_mask, conditional, state)
+                def on_step(state, t_next, _mask=known_mask, _pad=pad_target):
+                    alpha, beta = path.alpha(t_next), path.beta(t_next)
+                    noise = torch.randn_like(state)
+                    conditional = alpha * _pad + beta * noise
+                    return torch.where(_mask, conditional, state)
 
-            x0 = on_step(x0, ts[:, 0])
+                x0 = on_step(x0, ts[:, 0])
 
         if hasattr(score_model, "reset"):
             score_model.reset()  # self-conditioning must not carry across batches
@@ -265,6 +277,8 @@ def sample_smiles(
             xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
 
         logits = get_logits(xts)
+        if latent_sink is not None:
+            latent_sink.append((xts.detach().cpu(), logits.detach().cpu()))
         if decoder is None:
             ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
             smiles.extend(tokenizer.decode_batch(ids, special_decode=True))
