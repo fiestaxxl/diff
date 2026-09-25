@@ -1072,3 +1072,167 @@ So the design is: keep the length input, predict it from the caption, and the an
 caption too, through a two-minute head rather than through the diffusion model's own
 capacity. A control run with the length input removed entirely is queued behind the
 current sweep, because the reasoning above deserves a measurement of its own.
+
+## ChEBI-20 text guidance: the four-question sweep (Sep 9)
+
+Four questions were in flight at once, all on the same 47.9M backbone, all scored the
+same way: 500 val captions, guidance 0, 100 solver steps, length from the trained head.
+
+| run | steps | lr | backbone | validity | exact | MACCS | RDK | Morgan |
+|---|---|---|---|---|---|---|---|---|
+| `f120_lr3e4` | 120k | 3e-4 | zinc | **81.0%** | **2.00%** | **0.661** | **0.469** | **0.383** |
+| `f120_lr2e4` | 120k | 2e-4 | zinc | 79.0% | 1.00% | 0.645 | 0.450 | 0.370 |
+| `ft_adapted` | 60k | 3e-4 | chebi-adapted | 73.8% | 0.20% | 0.624 | 0.417 | 0.334 |
+| `f120_lr1e4` | 120k | 1e-4 | zinc | 70.2% | 0.20% | 0.592 | 0.374 | 0.304 |
+| `ftl_lr3e4_60k` | 60k | 3e-4 | zinc | 74.8% | 0.80% | 0.588 | 0.389 | 0.289 |
+| `ft_textonly` + head | 60k | 3e-4 | zinc | 77.2% | 0.60% | 0.571 | 0.368 | 0.292 |
+| `ft_textonly`, no prior | 60k | 3e-4 | zinc | 75.4% | 0.20% | 0.511 | 0.286 | 0.250 |
+| `ft_adapted` @20k | 20k | 3e-4 | chebi-adapted | 66.6% | 0.00% | 0.486 | 0.288 | 0.217 |
+
+**60k was too short.** Doubling to 120k at the same rate is worth +0.073 MACCS
+(0.588 → 0.661) and +6.2pp validity. This is the largest single effect measured on the
+text side, and 120k may still not be converged — `cmp_zinc_240k` is testing that.
+
+**Domain adaptation helps, but less.** 15k unconditional steps on ChEBI's own molecules
+before the text stage is worth +0.036 MACCS at matched text steps (0.624 vs 0.588). The
+two wins were measured separately and have not yet been combined; `cmp_adapt_120k` does
+that.
+
+**Dropping the length input costs quality.** With `length_conditioning=false` the model
+must infer length from the caption alone: 0.588 → 0.511 with no length prior at all, or
+→ 0.571 if the canvas is still pinned at sampling time. So the length *input* is worth
++0.017 and the sampling-time canvas pinning a further +0.060 — and pinning helps even a
+model that never saw a length embedding, which means the two mechanisms are separable
+and both real. The length head stays.
+
+**3e-4 is at or near the optimum.** 1e-4 (0.592) < 2e-4 (0.645) < 3e-4 (0.661), and
+1e-3 destroyed the model in the earlier sweep. `cmp_adapt_5e4` brackets from above.
+
+Loss remains useless for ranking: the three 120k runs finished at 1.3224 / 1.3231 /
+1.3261 against MACCS 0.661 / 0.645 / 0.592 — the ordering happens to be right here, but
+the spread is 0.3% of loss against 12% of MACCS, and `ft_adapted` (0.8389) and
+`ft_textonly` (0.8391) are indistinguishable in loss at 0.624 vs 0.571 MACCS.
+
+### The step-scaling curve, and where it stops
+
+Both compounding runs kept a checkpoint every 40k, so quality-vs-steps can be read off
+directly. All points scored identically: 500 val captions, guidance 0, head length.
+
+`cmp_zinc_240k` (ZINC backbone, 3e-4, cosine to 240k):
+
+| steps | validity | exact | MACCS | RDK | Morgan | ΔMACCS |
+|---|---|---|---|---|---|---|
+| 40k | 68.6% | 0.00% | 0.517 | 0.320 | 0.245 | — |
+| 80k | 70.0% | 0.80% | 0.593 | 0.388 | 0.306 | +0.076 |
+| 120k | 73.6% | 1.80% | 0.653 | 0.456 | 0.380 | +0.060 |
+| 160k | 78.4% | 2.60% | 0.682 | 0.482 | 0.403 | +0.029 |
+| 200k | 78.4% | 2.60% | **0.688** | **0.498** | 0.417 | +0.006 |
+| 240k | 77.2% | **2.80%** | 0.685 | 0.496 | **0.427** | −0.003 |
+
+**Steps saturate at 160–200k.** The increments halve each time and reach zero: past 200k
+there is nothing left to buy with time at this capacity. So the answer to "was 120k
+short" is yes, but only by +0.035, and the question is now closed — the remaining gap to
+MolT5-large (~0.83) is not a step-budget gap.
+
+Validity peaks earlier than similarity (81.0% at 120k, 77.2% at 240k) while Morgan keeps
+climbing to the end. Longer training keeps improving *which* molecule is drawn after
+validity has already turned over, so the two should be reported at different steps or
+the checkpoint chosen for whichever the claim rests on.
+
+`cmp_adapt_120k` (ChEBI-adapted backbone, same recipe):
+
+| steps | MACCS | vs ZINC backbone |
+|---|---|---|
+| 40k | 0.544 | +0.027 |
+| 80k | 0.619 | +0.026 |
+| 120k | 0.653 | −0.008 |
+
+**Domain adaptation buys convergence speed, not final quality — the two wins do not
+compound.** The +0.036 advantage measured at 60k is gone by 120k, where the adapted
+backbone is a hair *behind* (0.653 vs 0.661, inside seed noise). The 15k unconditional
+ChEBI steps are a head start that longer text training simply erases. This retracts the
+reading in the previous section, which had only the 60k point: what looked like a
+distribution-gap effect was a warm-up effect, and it is only visible because the curve
+was measured rather than the endpoint.
+
+**3e-4 is the optimum, now bracketed on both sides.** On the adapted backbone at matched
+120k steps, 5e-4 gives 0.636 against 3e-4's 0.653; below, 1e-4 gives 0.592 and 2e-4
+0.645. With 1e-3 destroying the model entirely, the useful window is narrow and centred
+on 3e-4.
+
+Standing best on ChEBI-20: **MACCS 0.688, RDK 0.498, Morgan 0.417, exact 2.6%, validity
+78.4%** at 200k steps, against MolT5-large's ~96% / ~31% / ~0.83. Progression across this
+study: 0.368 → 0.518 → 0.588 → 0.661 → 0.688.
+
+## What ChEBI-20 actually measures, and where length stops paying (Sep 11)
+
+Scored on the full 3,202-molecule test split with `scripts/score_benchmark.py`, which adds
+the four columns the published table has and we did not: BLEU, Levenshtein, FCD and a
+Text2Mol placeholder (that column needs the external retrieval model, which is on neither
+machine). 95 test captions describe isotopes and carry no structure at all; they stay in
+the exact-match denominator, as they do for every published row.
+
+### The test set is mostly a neighbourhood of the training set
+
+| relation to train (Morgan Tanimoto to nearest train molecule) | share |
+|---|---|
+| appears verbatim in train | 2.1% |
+| shares a Bemis-Murcko scaffold with train | 86.9% |
+| nearest neighbour > 0.9 | 37.5% |
+| nearest neighbour 0.7-0.9 | 28.7% |
+| nearest neighbour <= 0.7 | 33.8% |
+
+The nearest-neighbour distribution has median 0.787 and **p75 = 1.000**: a quarter of the
+test set has a training molecule with an identical Morgan fingerprint, differing only in
+stereochemistry or tautomer. Published exact match on this benchmark is 0.242, which sits
+inside the near-duplicate share.
+
+### Every metric is a steep function of that distance
+
+| model | bucket | exact | MACCS | Morgan | validity |
+|---|---|---|---|---|---|
+| length head, MAE 6.4 | near-duplicate | 0.085 | 0.842 | 0.647 | 0.848 |
+| | related | 0.030 | 0.725 | 0.414 | 0.714 |
+| | novel | 0.019 | 0.561 | 0.270 | 0.710 |
+| length encoder, MAE 3.3 | near-duplicate | 0.088 | **0.851** | 0.655 | 0.831 |
+| | related | 0.028 | 0.733 | 0.423 | 0.687 |
+| | novel | 0.020 | **0.582** | 0.284 | 0.699 |
+| true length | near-duplicate | **0.229** | **0.880** | 0.725 | 0.852 |
+| | related | 0.109 | 0.754 | 0.487 | 0.717 |
+| | novel | 0.075 | 0.617 | 0.347 | 0.735 |
+
+MACCS falls 0.851 -> 0.733 -> 0.582 across the three buckets and exact match falls
+0.088 -> 0.028 -> 0.020, so an aggregate number on ChEBI-20 is mostly a statement about
+how close the test molecules are to the training set. On the near-duplicate third our
+MACCS of 0.851 is level with the published aggregate of 0.854, and with a true length
+0.880 exceeds the 0.874 reported without correction. The aggregate gap is carried by the
+novel third, which is also the only part of the benchmark where the task is what it claims
+to be, and where no published work reports a number.
+
+### Length is nearly exhausted, and exact match needs exactness rather than closeness
+
+| length source | val MAE | exact length | BLEU | Exact | Leven | MACCS | FCD | Validity |
+|---|---|---|---|---|---|---|---|---|
+| head, 12 epochs | 7.5 | 12.1% | 0.676 | 0.031 | 32.87 | 0.723 | 1.23 | 0.771 |
+| head, 80 epochs | 6.4 | 19.9% | 0.665 | 0.047 | 33.31 | 0.736 | 1.10 | 0.763 |
+| fine-tuned encoder | 3.3 | 18.8% | 0.685 | **0.048** | **30.68** | **0.748** | 1.14 | 0.745 |
+| true | 0.0 | 100% | 0.707 | 0.142 | 28.69 | 0.777 | 0.98 | 0.774 |
+
+Fine-tuning the encoder rather than reading frozen states halved the error, 6.4 to 3.3
+tokens, and **exact match did not move**: 0.047 to 0.048. The prediction I wrote down
+beforehand, 0.07 to 0.08, was wrong because it assumed the payoff scales with MAE. It does
+not. Exact match needs the length to be exactly right, and the share of exactly-right
+lengths is 19% for both predictors even though one is twice as accurate on average. MACCS
+and Levenshtein, which tolerate approximation, did improve to the best values measured.
+
+Two consequences. Length as an external point estimate is close to spent: it bought MACCS
+0.723 -> 0.748 and exact 0.031 -> 0.048, and the remaining gap to the oracle needs exact
+lengths that no regressor will supply. And tighter pinning costs validity monotonically,
+0.771 -> 0.763 -> 0.745, because a fixed canvas leaves the sampler no room to recover.
+
+That is the argument for making termination internal and revisable rather than an external
+constant: a model that chooses its own ending can be exactly right, where a regressor can
+only be close, and it can fit the content to the length it chose instead of being forced
+into someone else's canvas. `loss.ce_include_pad=true` is the first half of that and is in
+flight; the cross-entropy on padding fell from 4.69 to 2.71 in 2,500 steps, so the readout
+is learning to name an end it was previously never shown.
