@@ -107,7 +107,20 @@ def stage_generate(args) -> None:
     (args.out / "reference.txt").write_text("\n".join(references) + "\n")
 
     predicted_lengths = None
-    if args.length_head is not None:
+    if args.length_file is not None:
+        # Lengths from any external predictor, one row per caption in split order. This
+        # keeps the sampler ignorant of how a length was arrived at, so a fine-tuned
+        # encoder needs no changes here.
+        stored = np.load(args.length_file)
+        if len(stored) < n:
+            raise ValueError(
+                f"{args.length_file} holds {len(stored)} lengths for {n} captions"
+            )
+        predicted_lengths = np.asarray(stored[:n], dtype=np.int64)
+        true_lengths = np.asarray(masks[:n]).sum(1)
+        print(f"  length file: MAE "
+              f"{np.abs(predicted_lengths - true_lengths).mean():.2f} tokens")
+    elif args.length_head is not None:
         from dimol.models.length_head import LengthHead
 
         head = LengthHead.load(args.length_head, map_location=device).to(device)
@@ -133,7 +146,7 @@ def stage_generate(args) -> None:
     for scale in args.guidance:
         params = SamplingParams(
             num_samples=n, batch_size=args.batch_size, num_timesteps=args.steps,
-            decode="grammar_close", strict=True, seed=args.seed,
+            decode="grammar_close", strict=True, seed=args.seed, solver=args.solver,
             text=np.asarray(text[:n], dtype=np.float32)[caption_index],
             text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
@@ -143,9 +156,12 @@ def stage_generate(args) -> None:
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
         name = (f"guidance_{scale}"
+                + ("_heun" if args.solver == "heun" else "")
                 + ("_shuffled" if args.shuffle_captions else "")
                 + ("_oraclelen" if args.oracle_length else "")
-                + ("_headlen" if args.length_head is not None else ""))
+                + ("_filelen" if args.length_file is not None else "")
+                + ("_headlen" if args.length_head is not None
+                   and args.length_file is None else ""))
         (args.out / f"{name}.txt").write_text("\n".join(generated) + "\n")
         ok = sum(grammatical(s) for s in generated)
         f1 = float(np.mean([token_f1(g, r, tokenizer)
@@ -212,6 +228,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--guidance", type=float, nargs="+", default=[0.0])
     parser.add_argument("--steps", type=int, default=100)
+    parser.add_argument("--length-file", type=Path, default=None,
+                        help="npy array of predicted lengths, one per caption in split "
+                             "order, from scripts/train_length_encoder.py. Takes "
+                             "precedence over --length-head")
+    parser.add_argument("--solver", default="euler_maruyama",
+                        choices=("euler_maruyama", "heun"),
+                        help="heun re-averages the drift at the end of each step for two "
+                             "model evaluations, so --steps N costs what 2N euler steps "
+                             "cost; compare at matched compute, not matched steps")
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--length-head", type=Path, default=None,
