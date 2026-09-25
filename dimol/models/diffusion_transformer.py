@@ -67,6 +67,15 @@ class TransformerConfig:
     # projection is zeroed, so a checkpoint grown into this shape behaves exactly as it
     # did before the layers existed.
     text_dim: int = 0
+
+    # Global caption conditioning. The caption currently reaches the model only through
+    # per-position cross-attention, which is the right shape for local detail and the
+    # wrong one for global facts: how big the molecule is, how many rings it has, what
+    # charge it carries. This pools the caption once and adds it to the adaLN vector
+    # beside the timestep, which is where every other global quantity already enters.
+    # The projection is zero-initialised, so a model that has it behaves exactly as one
+    # that does not until training moves it.
+    text_global: bool = False
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property
@@ -112,6 +121,14 @@ class DiffusionTransformer(nn.Module):
         if self.length_conditioning:
             self.length_embedding = nn.Embedding(config.max_pos + 1, config.time_dim)
 
+        self.text_global = bool(getattr(config, "text_global", False))
+        if self.text_global:
+            if not config.text_dim:
+                raise ValueError(
+                    "model.text_global needs a text path; set model.text_dim"
+                )
+            self.text_global_proj = nn.Linear(config.text_dim, config.time_dim)
+
         self.text_rope_embeddings = RoPE1D(config, dim=config.model_dim // config.num_heads)
         self.text_transformer_blocks = nn.ModuleList(
             [
@@ -127,6 +144,12 @@ class DiffusionTransformer(nn.Module):
 
         self.apply(self._init_params)
         self._init_special_layers()
+        if self.text_global:
+            # Zero, so the global path contributes nothing until it earns it, the same
+            # discipline as the cross-attention output projection and the length table.
+            with torch.no_grad():
+                self.text_global_proj.weight.zero_()
+                self.text_global_proj.bias.zero_()
         if self.length_conditioning:
             with torch.no_grad():
                 self.length_embedding.weight.zero_()
@@ -214,6 +237,15 @@ class DiffusionTransformer(nn.Module):
             raise ValueError(
                 "a length was passed but model.length_conditioning is off"
             )
+
+        if self.text_global and text is not None:
+            # Masked mean over caption tokens: padding must not dilute the summary.
+            if text_mask is None:
+                pooled = text.mean(1)
+            else:
+                keep = text_mask.to(text.dtype).unsqueeze(-1)
+                pooled = (text * keep).sum(1) / keep.sum(1).clamp(min=1.0)
+            time_embed = time_embed + self.text_global_proj(pooled.to(time_embed.dtype))
         rope_pos = torch.arange(T, device=device).unsqueeze(0).expand(B, T)
         # rope = self.text_rope_embeddings(rope_pos)
         cos, sin = self.text_rope_embeddings(rope_pos)

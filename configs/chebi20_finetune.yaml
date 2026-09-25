@@ -88,7 +88,13 @@ model:
                                # sampling time does not work: the model's plan for the
                                # canvas never depended on the length, and forcing it to
                                # fill one produced 60-atom garbage
-  text_dim: 768                # width of the frozen SciBERT encoding. Setting it gives
+  text_dim: 768
+  text_global: false           # true also pools the caption into one vector and adds it
+                               # to the adaLN modulation beside the timestep, so global
+                               # facts (size, ring count, charge) have a global path
+                               # instead of only per-position cross-attention. The
+                               # projection is zero-initialised, so false and true start
+                               # from identical behaviour.                # width of the frozen SciBERT encoding. Setting it gives
                                # every block a cross-attention into the caption, with a
                                # zeroed output projection, so this config loads the ZINC
                                # checkpoint unchanged and the text path grows from nothing

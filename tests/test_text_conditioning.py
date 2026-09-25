@@ -187,3 +187,90 @@ def test_self_conditioning_and_the_caption_compose():
     torch.manual_seed(0)
     out = _task(self_cond_prob=1.0).compute_loss(_model(), _batch(), step=0)
     assert torch.isfinite(out["loss"])
+
+
+# ---------------------------------------------------------------- global caption path
+
+
+def _global_model(text_dim: int = TEXT_DIM) -> DiffusionTransformer:
+    return DiffusionTransformer(TransformerConfig(
+        model_dim=32, emb_dim=8, time_dim=32, num_heads=4, num_text_blocks=2,
+        vocab_size=VOCAB, pad_idx=0, max_pos=SEQ + 4, text_dim=text_dim,
+        self_conditioning=True, length_conditioning=True, text_global=True))
+
+
+def test_the_global_caption_path_starts_inert():
+    """Zero-initialised, so turning the flag on cannot invalidate a pretrained checkpoint."""
+    model = _global_model().eval()
+    text, mask = _text()
+    inputs = _inputs()
+    torch.manual_seed(0)
+    with_caption = model(**inputs, text=text, text_mask=mask)
+    plain = _model().eval()
+    plain.load_state_dict(model.state_dict(), strict=False)
+    torch.manual_seed(0)
+    without = plain(**inputs, text=text, text_mask=mask)
+    assert torch.allclose(with_caption, without, atol=1e-6)
+
+
+def _wake_up(model):
+    """Take the model out of its adaLN-Zero identity state.
+
+    Every gate is zeroed at initialisation, so a change to the time embedding — which is
+    where the pooled caption lands — is invisible at the output until training moves the
+    modulation. A test that skips this measures nothing.
+    """
+    with torch.no_grad():
+        for block in model.text_transformer_blocks:
+            block.text_modulation.out_layer.weight.normal_(0, 0.5)
+            block.text_modulation.out_layer.bias.normal_(0, 0.5)
+
+
+def test_the_global_caption_path_changes_the_prediction_once_trained():
+    model = _global_model().eval()
+    _wake_up(model)
+    with torch.no_grad():
+        model.text_global_proj.weight.normal_(0, 0.5)
+    text, mask = _text()
+    inputs = _inputs()
+    torch.manual_seed(0)
+    first = model(**inputs, text=text, text_mask=mask)
+    torch.manual_seed(0)
+    second = model(**inputs, text=torch.randn_like(text), text_mask=mask)
+    assert not torch.allclose(first, second, atol=1e-5)
+
+
+def test_the_global_pool_ignores_masked_caption_tokens():
+    model = _global_model().eval()
+    _wake_up(model)
+    with torch.no_grad():
+        model.text_global_proj.weight.normal_(0, 0.5)
+    text, mask = _text(real=4)
+    inputs = _inputs()
+    torch.manual_seed(0)
+    before = model(**inputs, text=text, text_mask=mask)
+    changed = text.clone()
+    changed[:, 4:] = torch.randn_like(changed[:, 4:])  # only padding positions
+    torch.manual_seed(0)
+    after = model(**inputs, text=changed, text_mask=mask)
+    assert torch.allclose(before, after, atol=1e-6)
+
+
+def test_a_length_is_still_refused_without_length_conditioning():
+    """Guards the branch the global path was once accidentally spliced into."""
+    model = DiffusionTransformer(TransformerConfig(
+        model_dim=32, emb_dim=8, time_dim=32, num_heads=4, num_text_blocks=2,
+        vocab_size=VOCAB, pad_idx=0, max_pos=SEQ + 4, text_dim=TEXT_DIM,
+        self_conditioning=True, length_conditioning=False, text_global=True))
+    text, mask = _text()
+    with pytest.raises(ValueError, match="length_conditioning is off"):
+        model(input_embeddings=torch.randn(3, SEQ, 8), time=torch.full((3, 1), 0.5),
+              length=torch.full((3,), 6, dtype=torch.long), text=text, text_mask=mask)
+
+
+def test_the_global_path_needs_a_text_dim():
+    with pytest.raises(ValueError, match="text_global needs a text path"):
+        DiffusionTransformer(TransformerConfig(
+            model_dim=32, emb_dim=8, time_dim=32, num_heads=4, num_text_blocks=2,
+            vocab_size=VOCAB, pad_idx=0, max_pos=SEQ + 4, text_dim=0,
+            text_global=True))
