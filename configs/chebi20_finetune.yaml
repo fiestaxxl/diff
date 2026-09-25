@@ -89,6 +89,15 @@ model:
                                # canvas never depended on the length, and forcing it to
                                # fill one produced 60-atom garbage
   text_dim: 768
+  content_channel: false       # true adds one channel to the latent, diffused with
+                               # the embedding channels: positive where the molecule
+                               # continues, negative past its end. Termination becomes
+                               # something the model generates and revises at every solver
+                               # step instead of a number handed to it before the
+                               # trajectory starts. Measured motivation: with the canvas
+                               # unpinned the tail latent sits ~0.08 from the padding
+                               # embedding and the same from the nearest real token, so
+                               # the diffusion currently encodes nothing about the end.
   text_global: false           # true also pools the caption into one vector and adds it
                                # to the adaLN modulation beside the timestep, so global
                                # facts (size, ring count, charge) have a global path

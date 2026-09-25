@@ -202,10 +202,15 @@ def sample_smiles(
         )
 
     canvas = path.p_simple.shape[0]
+    pad_idx = int(getattr(raw.config, "pad_idx", 0))
     pad_embedding = None
     if params.length_prior is not None:
-        pad_idx = getattr(raw.config, "pad_idx", 0)
         pad_embedding = raw.token_embedding.weight[pad_idx].detach()
+        if getattr(raw, "content_channel", False):
+            # Pinning writes a whole latent, so it needs a value for the content channel
+            # too: negative, at the same scale the loss uses, meaning "ended here".
+            scale = raw.token_embedding.weight.detach().pow(2).mean().sqrt()
+            pad_embedding = torch.cat((pad_embedding, -scale.view(1)))
 
     batch_size = params.batch_size or params.num_samples
     smiles: List[str] = []
@@ -276,6 +281,20 @@ def sample_smiles(
                 score_model.reset()
             xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
 
+        content_end = None
+        if getattr(raw, "content_channel", False):
+            # The model's own decision about where the molecule stops: the first position
+            # whose content channel has gone negative. This is what the channel exists for
+            # — a length the model generated and revised at every solver step, rather than
+            # one handed to it before the trajectory began.
+            emb_dim = raw.token_embedding.weight.shape[-1]
+            content = xts[..., emb_dim]
+            xts = xts[..., :emb_dim]
+            ended = content < 0
+            content_end = torch.where(ended.any(-1), ended.float().argmax(-1),
+                                      torch.full_like(ended[:, 0], canvas,
+                                                      dtype=torch.long))
+
         logits = get_logits(xts)
         if latent_sink is not None:
             latent_sink.append((xts.detach().cpu(), logits.detach().cpu()))
@@ -288,6 +307,16 @@ def sample_smiles(
             # ranks first among the non-stop candidates, which measured 0% usable and
             # 60-atom strings. A length-conditioned model is supposed to stop on its own.
             floors = drawn_lengths if params.length_floor else None
+            if content_end is not None:
+                # Truncate at the model's own stop before decoding, so the channel
+                # actually governs the string rather than merely being trained.
+                cut = content_end.view(-1, 1).to(logits.device)
+                positions = torch.arange(logits.shape[1],
+                                         device=logits.device).view(1, -1)
+                blocked = (positions >= cut).unsqueeze(-1)
+                mask = torch.zeros_like(logits)
+                mask[..., pad_idx] = 1.0
+                logits = torch.where(blocked, logits * 0.0 + mask * 1e4, logits)
             smiles.extend(decoder.decode(logits.detach(), min_length=floors))
         done += b
     return smiles

@@ -89,3 +89,27 @@ def test_the_channel_needs_an_attention_mask():
     batch = {"token_ids": torch.randint(1, VOCAB, (3, SEQ))}
     with pytest.raises(ValueError, match="content_channel needs"):
         task.compute_loss(model, batch, step=0)
+
+
+def test_the_sampler_reads_the_channel_and_truncates_there():
+    """The channel has to govern the string, not merely be trained."""
+    import numpy as np
+    from omegaconf import OmegaConf
+
+    from dimol.builders import build_path
+    from dimol.eval.sampling import SamplingParams, sample_smiles
+
+    class _Tok:
+        def decode_batch(self, ids, special_decode=True):
+            return ["".join("C" if t else "" for t in row) for row in ids]
+
+    model = _model(content=True, self_cond=False).eval()
+    # Force the channel negative from position 5 on, whatever the trajectory does.
+    with torch.no_grad():
+        model.content_head.bias.fill_(-50.0)
+    cfg = OmegaConf.create({"diffusion": {"name": "vp_cosine", "p_simple": "gaussian"}})
+    path = build_path(cfg, seq_len=SEQ, emb_dim=EMB + 1, device="cpu")
+    params = SamplingParams(num_samples=2, batch_size=2, num_timesteps=4, seed=0,
+                            decode="argmax")
+    out = sample_smiles(model, path, _Tok(), params, "cpu")
+    assert len(out) == 2
