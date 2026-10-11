@@ -28,6 +28,13 @@ class SmilesARConfig:
     attn_dropout: float = 0.0
     tie_lm_head: bool = True      # LM head shares weights with token embedding
 
+    # Caption conditioning. With text_dim > 0 every block gains a cross-attention over
+    # frozen caption states, mirroring the diffusion denoiser, and the model becomes
+    # p(SMILES | caption) rather than p(SMILES). Two uses: a proper autoregressive
+    # baseline the paper needs anyway, and a scorer that can rank several diffusion
+    # candidates for the same caption without seeing the reference.
+    text_dim: int = 0
+
     def to_dict(self) -> dict: 
         return asdict(self)
         
@@ -80,16 +87,54 @@ class FeedForward(nn.Module):
     def forward(self, x): return self.fc2(self.act(self.fc1(x)))
 
 
+class CaptionCrossAttention(nn.Module):
+    """Queries from the molecule, keys and values from the frozen caption states.
+
+    The output projection is zeroed at construction so the block starts as the identity,
+    the same discipline the diffusion denoiser uses: turning conditioning on must not
+    invalidate a checkpoint trained without it.
+    """
+
+    def __init__(self, cfg: SmilesARConfig):
+        super().__init__()
+        self.n_heads = cfg.n_heads
+        self.head_dim = cfg.model_dim // cfg.n_heads
+        self.to_q = nn.Linear(cfg.model_dim, cfg.model_dim, bias=True)
+        self.to_kv = nn.Linear(cfg.text_dim, 2 * cfg.model_dim, bias=True)
+        self.out_proj = nn.Linear(cfg.model_dim, cfg.model_dim, bias=True)
+        with torch.no_grad():
+            self.out_proj.weight.zero_()
+            self.out_proj.bias.zero_()
+
+    def forward(self, x, text, text_mask=None):
+        B, L, C = x.shape
+        S = text.shape[1]
+        q = self.to_q(x).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
+        k, v = self.to_kv(text.to(x.dtype)).split(C, dim=-1)
+        k = k.view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+        attn_mask = None
+        if text_mask is not None:
+            attn_mask = text_mask.bool()[:, None, None, :]
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        return self.out_proj(out.transpose(1, 2).contiguous().view(B, L, C))
+
+
 class GPTBlock(nn.Module):
     def __init__(self, cfg: SmilesARConfig):
         super().__init__()
         self.norm1 = nn.LayerNorm(cfg.model_dim)
         self.attn  = CausalSelfAttention(cfg)
+        self.cross = CaptionCrossAttention(cfg) if cfg.text_dim else None
+        self.norm_cross = nn.LayerNorm(cfg.model_dim) if cfg.text_dim else None
         self.norm2 = nn.LayerNorm(cfg.model_dim)
         self.ff    = FeedForward(cfg)
 
-    def forward(self, x):
+    def forward(self, x, text=None, text_mask=None):
         x = x + self.attn(self.norm1(x))
+        if self.cross is not None and text is not None:
+            # Ungated: the output projection starts at zero, which is the gate.
+            x = x + self.cross(self.norm_cross(x), text, text_mask)
         x = x + self.ff(self.norm2(x))
         return x
 
@@ -131,16 +176,20 @@ class SmilesAR(nn.Module):
             if getattr(m, "weight", None) is not None: nn.init.ones_(m.weight)
             if getattr(m, "bias",   None) is not None: nn.init.zeros_(m.bias)
 
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, token_ids: torch.Tensor, text=None, text_mask=None) -> torch.Tensor:
         """token_ids: (B, L) -> logits: (B, L, V).
         logits[:, i, :] = p(token at position i+1 | tokens[:, :i+1]) via causal mask.
         For grammar-guidance use, the prediction *for* position i is logits[:, i-1, :].
         """
         B, L = token_ids.shape
         pos = torch.arange(L, device=token_ids.device)
+        if text is not None and not self.config.text_dim:
+            raise ValueError(
+                "a caption was passed but model.text_dim is 0; this model has no text path"
+            )
         x = self.token_embedding(token_ids) + self.pos_embedding(pos)[None]
-        for blk in self.blocks: 
-            x = blk(x)
+        for blk in self.blocks:
+            x = blk(x, text=text, text_mask=text_mask)
         x = self.norm(x)
         return self.lm_head(x)
 

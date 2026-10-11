@@ -89,6 +89,14 @@ model:
                                # canvas never depended on the length, and forcing it to
                                # fill one produced 60-atom garbage
   text_dim: 768
+  pad_variants: 1              # >1 spreads padding over that many ids, assigned
+                               # cyclically by position, so the diffusion is not asked to
+                               # produce one identical value at ~70% of the canvas. The
+                               # tail latent was measured to sit ~0.08 from the padding
+                               # embedding and the same from the nearest real token, with
+                               # no structure, which is what a degenerate target looks
+                               # like. 1 reproduces the original behaviour exactly.
+  pad_variant_base: 0          # first variant id; 0 takes them from the top of the vocab
   content_channel: false       # true adds one channel to the latent, diffused with
                                # the embedding channels: positive where the molecule
                                # continues, negative past its end. Termination becomes

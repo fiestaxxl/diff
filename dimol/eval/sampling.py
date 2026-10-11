@@ -75,6 +75,15 @@ class SamplingParams:
                                   # drawing from it. Only honest when the length is known
                                   # or predicted; against a benchmark it is an oracle and
                                   # has to be labelled as one
+    content_rule: str = "last_positive"  # how to turn the content channel into a stop.
+                                  # "first_negative" truncates at the first position below
+                                  # zero, which a single noisy position amputates: measured
+                                  # MAE 21.49 and 78% of molecules cut short. "last_positive"
+                                  # stops one past the last position the channel calls
+                                  # content, measured MAE 3.22 on the same model and the
+                                  # same samples. "run_3" / "run_5" need that many
+                                  # consecutive negatives. Same latent, same weights: the
+                                  # rule is worth 18 tokens of length error
     pin_canvas: bool = True       # overwrite every position past the length with the
                                   # padding embedding at each solver step. False still
                                   # gives the model the length as an input but leaves the
@@ -94,6 +103,43 @@ class SamplingParams:
                                   # path, the parameterisation or the loss changes
     time_grid: str = "uniform"    # uniform | data_dense | noise_dense | mid_dense | ends_dense
     time_grid_power: float = 2.0  # how strongly the two dense grids are skewed
+
+
+def _content_stop(content: torch.Tensor, canvas: int, rule: str) -> torch.Tensor:
+    """Turn the content channel into one stop position per sample.
+
+    The channel crosses zero at the end of the molecule, but it is noisy, and how that
+    noise is handled dominates the result: on one checkpoint the first-negative rule gave
+    a length MAE of 21.49 with 78% of molecules truncated early, while last-positive gave
+    3.22 on exactly the same latents.
+    """
+    negative = content < 0
+    batch = content.shape[0]
+    full = torch.full((batch,), canvas, dtype=torch.long, device=content.device)
+
+    if rule == "first_negative":
+        return torch.where(negative.any(-1), negative.float().argmax(-1), full)
+
+    if rule == "last_positive":
+        positive = content > 0
+        # One past the last position the channel still calls content.
+        flipped = positive.flip(-1).float()
+        last = (canvas - 1) - flipped.argmax(-1)
+        return torch.where(positive.any(-1), (last + 1).clamp(max=canvas), 
+                           torch.zeros_like(full))
+
+    if rule.startswith("run_"):
+        k = int(rule.split("_", 1)[1])
+        if k > canvas:
+            return full
+        # A run of k negatives starting at i: all of negative[i:i+k].
+        windows = negative.unfold(-1, k, 1).all(-1)
+        return torch.where(windows.any(-1), windows.float().argmax(-1), full)
+
+    raise ValueError(
+        f"sampling.content_rule={rule!r}; expected 'first_negative', 'last_positive' "
+        "or 'run_<k>'"
+    )
 
 
 def _draw_lengths(prior, count: int, canvas: int, generator) -> torch.Tensor:
@@ -204,6 +250,16 @@ def sample_smiles(
     canvas = path.p_simple.shape[0]
     pad_idx = int(getattr(raw.config, "pad_idx", 0))
     pad_embedding = None
+    pad_variants = int(getattr(raw.config, "pad_variants", 1) or 1)
+    pad_variant_ids = None
+    if pad_variants > 1:
+        base = int(getattr(raw.config, "pad_variant_base", 0) or 0)
+        if base <= 0:
+            base = int(raw.config.vocab_size) - pad_variants
+        pad_variant_ids = list(range(base, base + pad_variants))
+        if decoder is not None and hasattr(decoder, "is_stop"):
+            for i in pad_variant_ids:
+                decoder.is_stop[i] = True
     if params.length_prior is not None:
         pad_embedding = raw.token_embedding.weight[pad_idx].detach()
         if getattr(raw, "content_channel", False):
@@ -244,7 +300,20 @@ def sample_smiles(
                 positions = torch.arange(canvas).view(1, canvas)
                 known = (positions >= lengths.view(b, 1)).to(device)  # True where padding
                 known_mask = known.unsqueeze(-1)
-                pad_target = pad_embedding.view(1, 1, -1)
+                if pad_variant_ids is not None:
+                    # One row per canvas position, cycling through the variants exactly as
+                    # the loss assigns them.
+                    cyc = [pad_variant_ids[i % len(pad_variant_ids)]
+                           for i in range(canvas)]
+                    table = raw.token_embedding.weight.detach()
+                    pad_target = table[torch.as_tensor(cyc, device=table.device)]
+                    if pad_embedding.shape[-1] != pad_target.shape[-1]:
+                        extra = pad_embedding[pad_target.shape[-1]:]
+                        pad_target = torch.cat(
+                            (pad_target, extra.view(1, -1).expand(canvas, -1)), dim=-1)
+                    pad_target = pad_target.unsqueeze(0)
+                else:
+                    pad_target = pad_embedding.view(1, 1, -1)
 
                 def on_step(state, t_next, _mask=known_mask, _pad=pad_target):
                     alpha, beta = path.alpha(t_next), path.beta(t_next)
@@ -282,6 +351,7 @@ def sample_smiles(
             xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
 
         content_end = None
+        full_latent = xts
         if getattr(raw, "content_channel", False):
             # The model's own decision about where the molecule stops: the first position
             # whose content channel has gone negative. This is what the channel exists for
@@ -290,14 +360,13 @@ def sample_smiles(
             emb_dim = raw.token_embedding.weight.shape[-1]
             content = xts[..., emb_dim]
             xts = xts[..., :emb_dim]
-            ended = content < 0
-            content_end = torch.where(ended.any(-1), ended.float().argmax(-1),
-                                      torch.full_like(ended[:, 0], canvas,
-                                                      dtype=torch.long))
+            content_end = _content_stop(content, canvas, params.content_rule)
 
         logits = get_logits(xts)
         if latent_sink is not None:
-            latent_sink.append((xts.detach().cpu(), logits.detach().cpu()))
+            # The FULL latent, content channel included: the sink is a diagnostic hook and
+            # narrowing it here would hide the one quantity worth inspecting.
+            latent_sink.append((full_latent.detach().cpu(), logits.detach().cpu()))
         if decoder is None:
             ids = logits.softmax(-1).argmax(-1).detach().cpu().tolist()
             smiles.extend(tokenizer.decode_batch(ids, special_decode=True))

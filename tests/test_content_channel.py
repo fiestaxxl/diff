@@ -108,8 +108,38 @@ def test_the_sampler_reads_the_channel_and_truncates_there():
     with torch.no_grad():
         model.content_head.bias.fill_(-50.0)
     cfg = OmegaConf.create({"diffusion": {"name": "vp_cosine", "p_simple": "gaussian"}})
-    path = build_path(cfg, seq_len=SEQ, emb_dim=EMB + 1, device="cpu")
+    width = getattr(model, "latent_dim", model.config.emb_dim)
+    assert width == EMB + 1, "callers derive the sampler width from the model, not emb_dim"
+    path = build_path(cfg, seq_len=SEQ, emb_dim=width, device="cpu")
     params = SamplingParams(num_samples=2, batch_size=2, num_timesteps=4, seed=0,
                             decode="argmax")
+    out = sample_smiles(model, path, _Tok(), params, "cpu")
+    assert len(out) == 2
+
+
+def test_pinning_the_canvas_spans_the_content_channel():
+    """The regression: a pinned canvas writes a whole latent, content channel included.
+
+    The first content-channel generation died here — p_simple was built at emb_dim, so a
+    32-wide trajectory met a 33-wide padding target. The earlier sampler test missed it
+    because it passed the width by hand instead of deriving it the way callers do.
+    """
+    import numpy as np
+    from omegaconf import OmegaConf
+
+    from dimol.builders import build_path
+    from dimol.eval.sampling import SamplingParams, sample_smiles
+
+    class _Tok:
+        def decode_batch(self, ids, special_decode=True):
+            return ["C" * len(row) for row in ids]
+
+    model = _model(content=True, self_cond=False).eval()
+    cfg = OmegaConf.create({"diffusion": {"name": "vp_cosine", "p_simple": "gaussian"}})
+    width = getattr(model, "latent_dim", model.config.emb_dim)
+    path = build_path(cfg, seq_len=SEQ, emb_dim=width, device="cpu")
+    params = SamplingParams(num_samples=2, batch_size=2, num_timesteps=4, seed=0,
+                            decode="argmax",
+                            length_prior=np.array([4, 6]), length_exact=True)
     out = sample_smiles(model, path, _Tok(), params, "cpu")
     assert len(out) == 2

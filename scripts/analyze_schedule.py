@@ -91,7 +91,7 @@ def main(cfg: DictConfig) -> None:
     model.eval()
     tokenizer = build_tokenizer(cfg)
     seq_len = int(cfg.variables.get("seq_len"))
-    path = build_path(cfg, seq_len=seq_len, emb_dim=model.config.emb_dim, device=device)
+    path = build_path(cfg, seq_len=seq_len, emb_dim=getattr(model, "latent_dim", model.config.emb_dim), device=device)
 
     env = init_distributed(device=device)
     loader, _ = build_dataloader(cfg.eval_loader, int(node.get("batch_size", 512)),

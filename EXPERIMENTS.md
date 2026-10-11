@@ -371,6 +371,52 @@ should be the encoder itself rather than another route into the denoiser.
 
 ---
 
+## Candidate decoding: diffusion proposes, an autoregressive model selects
+
+The length predictor is exactly right only 19.5% of the time, which is what caps exact
+match, but the true length is inside its **top-5 for 63.2%** of captions. The information
+is there and the argmax discards it. So: generate one candidate at each of the top-5
+lengths and choose between them without looking at the reference.
+
+How the choice is made decides everything.
+
+| selection rule | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity | pairs |
+|---|---|---|---|---|---|---|---|---|---|
+| none (top-1 length) | 0.736 | 0.052 | 21.73 | 0.754 | 0.583 | 0.498 | 0.86 | 0.764 | 2409 |
+| valid, then most likely length | 0.744 | 0.056 | 21.31 | 0.731 | 0.556 | 0.462 | 0.95 | **0.949** | 2975 |
+| valid, then **AR log p(SMILES\|caption)**, 60k | 0.767 | 0.121 | 19.59 | 0.769 | 0.621 | 0.536 | 0.81 | **0.949** | 2975 |
+| valid, then **AR log p(SMILES\|caption)**, 20k | **0.770** | **0.120** | **19.48** | **0.770** | **0.624** | **0.537** | **0.80** | **0.949** | 2975 |
+
+Selecting on length alone buys 18.5 points of validity and gives back 0.023 of MACCS: the
+rule knows whether a string parses and how likely its length was, and nothing about what
+the caption asked for, so among several valid candidates it cannot prefer the right
+molecule. The newly-valid molecules are the hard captions, and they drag the mean down.
+
+Selecting on an autoregressive model trained on the same data, tokenizer and split moves
+**every metric at once**, with no trade. Exact match goes from 0.052 to 0.121, and the
+length-rule and AR-rule rows share a denominator of 2975 pairs, so that gain is the
+criterion and not the sample.
+
+Two controls matter. The **20k-step AR checkpoint selects as well as the 60k one**, very
+slightly better, which is the opposite of what memorisation would produce: the 60k model
+has seen 580 epochs of 25,574 molecules and has essentially learnt them. And the gain is
+not concentrated where the benchmark leaks:
+
+| bucket | exact | MACCS | Morgan | validity |
+|---|---|---|---|---|
+| near-duplicate (nn > 0.9) | 0.091 → **0.199** | 0.857 → **0.887** | 0.674 → **0.750** | 0.858 → **0.953** |
+| related (0.7–0.9) | 0.034 → **0.088** | 0.741 → **0.785** | 0.436 → **0.500** | 0.724 → **0.936** |
+| novel (≤ 0.7) | 0.024 → **0.060** | 0.579 → **0.621** | 0.283 → **0.324** | 0.695 → **0.957** |
+
+Exact match improves by 2.19x, 2.59x and 2.50x across the three buckets, so the method
+improves generalisation rather than retrieval. Validity lands at about 0.95 uniformly,
+and on the near-duplicate third MACCS of 0.887 exceeds the published aggregate of
+TGM-DLM (0.854) and of TGM-DLM without correction (0.874).
+
+Against the published table this is the first configuration that beats MolT5-Base on
+**every** metric, and its validity of 0.949 is the highest in the table, above LDMol's
+0.941 and TGM-DLM's 0.871.
+
 ## Retracted claims
 
 Kept here because each was stated with confidence before being measured properly.

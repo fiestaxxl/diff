@@ -116,7 +116,7 @@ def main(cfg: DictConfig) -> None:
     model.eval()
     tokenizer = build_tokenizer(cfg)
     seq_len = int(gen.get("seq_len") or cfg.variables.get("seq_len", None))
-    path = build_path(cfg, seq_len=seq_len, emb_dim=model.config.emb_dim, device=device)
+    path = build_path(cfg, seq_len=seq_len, emb_dim=getattr(model, "latent_dim", model.config.emb_dim), device=device)
 
     params = SamplingParams(
         num_samples=int(gen.get("num_samples") or 512),

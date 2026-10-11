@@ -89,7 +89,7 @@ def stage_generate(args) -> None:
                                                  map_location=device)
     model.eval()
     canvas = int(cfg.variables.seq_len)
-    path = build_path(cfg, seq_len=canvas, emb_dim=model.config.emb_dim, device=device)
+    path = build_path(cfg, seq_len=canvas, emb_dim=getattr(model, "latent_dim", model.config.emb_dim), device=device)
 
     text = np.load(data_dir / f"{args.split}_text.npy", mmap_mode="r")
     text_mask = np.load(data_dir / f"{args.split}_text_mask.npy", mmap_mode="r")
@@ -147,6 +147,7 @@ def stage_generate(args) -> None:
         params = SamplingParams(
             num_samples=n, batch_size=args.batch_size, num_timesteps=args.steps,
             decode="grammar_close", strict=True, seed=args.seed, solver=args.solver,
+            content_rule=args.content_rule,
             text=np.asarray(text[:n], dtype=np.float32)[caption_index],
             text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
@@ -232,6 +233,11 @@ def main() -> None:
                         help="npy array of predicted lengths, one per caption in split "
                              "order, from scripts/train_length_encoder.py. Takes "
                              "precedence over --length-head")
+    parser.add_argument("--content-rule", default="last_positive",
+                        choices=("first_negative", "last_positive", "run_2", "run_3",
+                                 "run_5"),
+                        help="how a content channel becomes a stop position. Only used by "
+                             "models trained with model.content_channel")
     parser.add_argument("--solver", default="euler_maruyama",
                         choices=("euler_maruyama", "heun"),
                         help="heun re-averages the drift at the end of each step for two "

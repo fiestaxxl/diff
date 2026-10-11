@@ -77,7 +77,7 @@ def main() -> None:
                                                  map_location=device)
     model.eval()
     canvas_len = int(cfg.variables.seq_len)
-    path = build_path(cfg, seq_len=canvas_len, emb_dim=model.config.emb_dim,
+    path = build_path(cfg, seq_len=canvas_len, emb_dim=getattr(model, "latent_dim", model.config.emb_dim),
                       device=device)
 
     data_dir = Path(cfg.variables.data_dir)

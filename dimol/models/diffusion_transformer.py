@@ -91,6 +91,21 @@ class TransformerConfig:
     # untouched, so no checkpoint surgery is needed: the extra input column is zeroed, and
     # a model with the flag off is bit-identical to one from before it existed.
     content_channel: bool = False
+
+    # ---- distinct padding ----
+    # Every padding position currently carries the SAME target embedding, so the diffusion
+    # must produce one identical value at ~70% of the canvas. Measured consequence: the
+    # tail latent sits about 0.08 from the padding embedding and the same distance from the
+    # nearest real token, with no structure to it, whether or not the readout was trained
+    # on padding. Rainbow Padding (ICLR 2026) and VoidPadding reached the same conclusion
+    # from the masked-diffusion side.
+    #
+    # pad_variants > 1 spreads padding over that many consecutive ids starting at
+    # pad_variant_base, assigned cyclically by position, so consecutive padding positions
+    # have different targets. 1 reproduces the original behaviour exactly.
+    pad_variants: int = 1
+    pad_variant_base: int = 0     # first id of the variant block; 0 means "pick the top of
+                                  # the vocabulary automatically"
  
     # ---- alias kept for backward compat with code using emb_dim ----
     # @property

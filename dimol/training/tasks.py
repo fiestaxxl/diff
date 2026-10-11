@@ -265,6 +265,25 @@ class DiffusionTask(Task):
         embed = raw.token_embedding
         get_logits = raw.out_proj
 
+        # Distinct padding: spread the padding class over several ids, assigned cyclically
+        # by position, so the diffusion is not asked to produce one identical value at most
+        # of the canvas. token_ids is replaced here, so both the diffusion target and the
+        # cross-entropy target see the variants.
+        variants = int(getattr(raw.config, "pad_variants", 1) or 1)
+        if variants > 1:
+            if pad_mask is None:
+                raise ValueError(
+                    "model.pad_variants > 1 needs 'attention_mask' in the batch: the "
+                    "variants are assigned to the positions that are padding"
+                )
+            base = int(getattr(raw.config, "pad_variant_base", 0) or 0)
+            if base <= 0:
+                base = int(raw.config.vocab_size) - variants
+            positions = torch.arange(token_ids.shape[1], device=token_ids.device)
+            cyclic = base + (positions % variants)
+            token_ids = torch.where(pad_mask.bool(), token_ids,
+                                    cyclic.unsqueeze(0).expand_as(token_ids))
+
         token_embeddings = embed(token_ids)
         if self.embedding_norm == "rms":
             # fix the latent scale: the raw table grows by ~50x over a run, which silently
@@ -549,6 +568,7 @@ class ARTask(Task):
         *,
         pad_idx: int = 0,
         label_smoothing: float = 0.0,
+        caption_dropout: float = 0.0,
         autocast: Callable[[], Any] = nullcontext,
         autocast_scope: str = "loss",
         seq_len: int = 0,
@@ -556,6 +576,7 @@ class ARTask(Task):
     ):
         self.pad_idx = pad_idx
         self.label_smoothing = label_smoothing
+        self.caption_dropout = float(caption_dropout)
         self.autocast = autocast
         self.autocast_scope = autocast_scope
         self.seq_len = seq_len
@@ -567,11 +588,31 @@ class ARTask(Task):
         inp = token_ids[:, :-1]  # (B, L-1)
         tgt = token_ids[:, 1:]  # (B, L-1)
 
+        # A caption-conditioned AR model is p(SMILES | caption); an unconditional one
+        # ignores the batch's caption entirely. Which one this is comes from the model.
+        raw = unwrap_model(model)
+        text_kwargs: Dict[str, torch.Tensor] = {}
+        if int(getattr(raw.config, "text_dim", 0) or 0):
+            text = batch.get("text")
+            if text is None:
+                raise ValueError(
+                    "the AR model has a text path but the batch carries no 'text'; "
+                    "use the smiles_text_npy dataset"
+                )
+            mask = batch.get("text_mask")
+            if mask is None:
+                mask = torch.ones(text.shape[:2], dtype=torch.bool, device=text.device)
+            if raw.training and self.caption_dropout > 0:
+                keep = (torch.rand(text.shape[0], device=text.device)
+                        >= self.caption_dropout)
+                mask = mask.bool() & keep[:, None]
+            text_kwargs = {"text": text, "text_mask": mask}
+
         loss_ctx = self.autocast if self.autocast_scope == "loss" else nullcontext
         forward_ctx = nullcontext if self.autocast_scope == "loss" else self.autocast
         with loss_ctx():
             with forward_ctx():
-                logits = model(inp)
+                logits = model(inp, **text_kwargs)
             loss = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 tgt.reshape(-1),

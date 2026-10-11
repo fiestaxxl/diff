@@ -128,6 +128,12 @@ class GrammarConstrainedDecoder:
         # because the model is trained on "<bos> tokens <eos> <pad>..." and puts <bos>
         # on the first canvas position
         self.is_stop = np.zeros(self.vocab_size, dtype=bool)
+        # Distinct padding (model.pad_variants > 1) spreads the padding class over several
+        # ids so the diffusion does not have to produce one identical value at most of the
+        # canvas. Every one of them ends the molecule exactly as <pad> does.
+        for idx in list(getattr(tokenizer, "pad_variant_ids", ()) or ()):
+            if idx is not None and 0 <= int(idx) < self.vocab_size:
+                self.is_stop[int(idx)] = True
         for idx in (self.eos_id, self.pad_id):
             if idx is not None and idx < self.vocab_size:
                 self.is_stop[idx] = True

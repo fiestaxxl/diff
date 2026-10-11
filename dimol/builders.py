@@ -140,6 +140,9 @@ def build_task(
     }
 
     if task_name == "ar":
+        # caption_dropout matters for an AR model with a text path: it is what trains the
+        # unconditional branch, exactly as in the diffusion recipe.
+        kwargs["caption_dropout"] = float(loss_cfg.get("caption_dropout", 0.0))
         return registry.tasks.build({"name": "ar", **kwargs})
 
     class_weights = None
