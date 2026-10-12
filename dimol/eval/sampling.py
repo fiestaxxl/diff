@@ -120,6 +120,17 @@ class SamplingParams:
     smc_lambda: float = 1.0       # weight on the per-token mean log-likelihood
     smc_ess: float = 0.5          # skip a resample while the effective sample size is
                                   # above this fraction of the particle count
+    # --- the length as a posterior rather than a decision -------------------------
+    # Pinning the canvas is how length is imposed, and it is imposed before the first
+    # solver step: every position past the drawn length is overwritten with its exact
+    # conditional value at every step, so the molecule cannot end anywhere else. The
+    # predictor is exactly right 19.5% of the time, which is what caps exact match, and
+    # the usual answer is to run the sampler once per candidate length. This is the other
+    # answer: pin each position by how sure the predictor is that the molecule has ended
+    # there, so one trajectory integrates over the length posterior and the readout picks
+    # the stop inside its support. A hard length is the special case where the weights are
+    # all zero or one.
+    length_cdf: Optional[Any] = None   # (num_samples, canvas) of P(length <= position)
     ar_min_prob: float = 0.0      # revise only where the AR model is at least this
                                   # confident in its own choice
     draft_max_prob: float = 1.0   # and only where the diffusion readout is at most
@@ -509,8 +520,17 @@ def sample_smiles(
             drawn_lengths = lengths
             if params.pin_canvas:
                 positions = torch.arange(canvas).view(1, canvas)
-                known = (positions >= lengths.view(b, 1)).to(device)  # True where padding
-                known_mask = known.unsqueeze(-1)
+                if params.length_cdf is not None:
+                    weight = torch.as_tensor(
+                        params.length_cdf, dtype=torch.float32)[done : done + b]
+                    if weight.shape[1] != canvas:
+                        raise ValueError(
+                            f"generate.length_cdf is {weight.shape[1]} wide for a canvas "
+                            f"of {canvas}")
+                    known_mask = weight.to(device).unsqueeze(-1)
+                else:
+                    known = (positions >= lengths.view(b, 1)).to(device)
+                    known_mask = known.unsqueeze(-1)
                 if pad_variant_ids is not None:
                     # One row per canvas position, cycling through the variants exactly as
                     # the loss assigns them.
@@ -532,7 +552,13 @@ def sample_smiles(
                     alpha, beta = path.alpha(t_next), path.beta(t_next)
                     noise = torch.randn_like(state)
                     conditional = alpha * _pad + beta * noise
-                    return torch.where(_box[0], conditional, state)
+                    mask = _box[0]
+                    if mask.dtype == torch.bool:
+                        return torch.where(mask, conditional, state)
+                    # A weight rather than a decision: the position is pulled toward its
+                    # padding conditional in proportion to the posterior that the molecule
+                    # has already ended there.
+                    return mask * conditional + (1.0 - mask) * state
 
                 x0 = on_step(x0, ts[:, 0])
 

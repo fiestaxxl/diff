@@ -159,3 +159,63 @@ def test_the_score_ignores_how_much_padding_follows_the_molecule():
     on_wide = _ar_mean_logp(wide, score_model, ar, PAD, True)
     assert on_wide.shape == (2,)
     assert torch.allclose(on_narrow, on_wide, atol=1e-5)
+
+
+# --- the length as a posterior rather than a decision ---------------------------------
+
+def _pin_params(cdf=None):
+    return SamplingParams(num_samples=2, length_cdf=cdf)
+
+
+def test_a_hard_mask_still_overwrites_the_tail_exactly():
+    """The boolean path must be untouched: it is what every existing number was measured
+    with, and a weighted blend that quietly replaced it would move them all."""
+    path = _path()
+    state = torch.randn(2, SEQ, EMB)
+    pad = torch.randn(1, 1, EMB)
+    mask = torch.zeros(2, SEQ, 1, dtype=torch.bool)
+    mask[:, 8:] = True
+    t = torch.full((2, 1, 1), 0.5)
+    torch.manual_seed(0)
+    alpha, beta = path.alpha(t), path.beta(t)
+    noise = torch.randn_like(state)
+    out = torch.where(mask, alpha * pad + beta * noise, state)
+    assert torch.equal(out[:, :8], state[:, :8])
+    assert not torch.allclose(out[:, 8:], state[:, 8:])
+
+
+def test_the_posterior_is_a_cumulative_distribution_over_the_canvas():
+    import numpy as np
+
+    cand = np.array([[5, 7, 9]], dtype=np.int64)
+    probs = np.array([[0.5, 0.3, 0.2]], dtype=np.float32)
+    positions = np.arange(12).reshape(1, 12, 1)
+    below = cand.reshape(1, 1, -1) <= positions
+    cdf = (below * probs.reshape(1, 1, -1)).sum(-1)
+    assert cdf[0, 4] == pytest.approx(0.0)      # before any candidate ends
+    assert cdf[0, 5] == pytest.approx(0.5)      # the first candidate has ended here
+    assert cdf[0, 7] == pytest.approx(0.8)
+    assert cdf[0, 9] == pytest.approx(1.0)      # past every candidate
+    assert all(cdf[0, i] <= cdf[0, i + 1] for i in range(11))
+
+
+def test_a_weighted_mask_leaves_the_certain_ends_exactly_where_a_hard_one_would():
+    """Only the uncertain band may differ; a position the posterior is sure about has to
+    behave exactly as the hard mask behaved, or the two are not comparable."""
+    path = _path()
+    state = torch.randn(2, SEQ, EMB)
+    pad = torch.randn(1, 1, EMB)
+    weight = torch.zeros(2, SEQ, 1)
+    weight[:, 6:9] = torch.tensor([0.25, 0.6, 0.9]).view(1, 3, 1)
+    weight[:, 9:] = 1.0
+    t = torch.full((2, 1, 1), 0.5)
+    torch.manual_seed(0)
+    alpha, beta = path.alpha(t), path.beta(t)
+    noise = torch.randn_like(state)
+    conditional = alpha * pad + beta * noise
+    soft = weight * conditional + (1.0 - weight) * state
+    assert torch.allclose(soft[:, :6], state[:, :6])
+    assert torch.allclose(soft[:, 9:], conditional.expand_as(state)[:, 9:])
+    middle = soft[:, 6:9]
+    assert not torch.allclose(middle, state[:, 6:9])
+    assert not torch.allclose(middle, conditional.expand_as(state)[:, 6:9])

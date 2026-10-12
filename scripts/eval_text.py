@@ -147,6 +147,27 @@ def stage_generate(args) -> None:
         print(f"  length head: MAE {np.abs(predicted_lengths - true_lengths).mean():.2f} "
               f"tokens on these captions")
 
+    length_cdf = None
+    if args.length_posterior is not None:
+        # P(length <= position), built from the predictor's own top-k distribution over
+        # lengths. The canvas is then pinned by how sure the predictor is that the
+        # molecule has ended, instead of being cut at its argmax.
+        cand = np.load(args.length_posterior)[:n]
+        probs = np.load(args.length_posterior.with_name(
+            args.length_posterior.name.replace("lengths", "probs")))[:n]
+        probs = probs / np.clip(probs.sum(1, keepdims=True), 1e-8, None)
+        canvas = int(OmegaConf.load(args.config).variables.seq_len)
+        positions = np.arange(canvas).reshape(1, canvas, 1)
+        below = (cand.reshape(len(cand), 1, -1) <= positions)
+        length_cdf = (below * probs.reshape(len(probs), 1, -1)).sum(-1).astype(np.float32)
+        length_cdf = np.clip(length_cdf, 0.0, 1.0)
+        sharp = float(args.length_posterior_power)
+        if sharp != 1.0:
+            length_cdf = length_cdf ** sharp
+        band = ((length_cdf > 1e-3) & (length_cdf < 1 - 1e-3)).sum(1)
+        print(f"  length posterior: {band.mean():.1f} canvas positions per caption are "
+              f"neither certainly molecule nor certainly padding")
+
     particles = max(int(args.smc_particles), 1)
     smc_alphas = tuple(float(a) for a in args.smc_alphas.split(",") if a.strip()) \
         if args.smc_alphas else ()
@@ -212,6 +233,8 @@ def stage_generate(args) -> None:
                           or length_matrix is not None),
             smc_group=particles, smc_alphas=smc_alphas,
             smc_lambda=args.smc_lambda, smc_ess=args.smc_ess,
+            length_cdf=(np.repeat(length_cdf, particles, axis=0)
+                        if length_cdf is not None and particles > 1 else length_cdf),
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
         name = (f"guidance_{scale}"
@@ -226,7 +249,9 @@ def stage_generate(args) -> None:
                 + ("_filelen" if args.length_file is not None else "")
                 + ("_headlen" if args.length_head is not None
                    and args.length_file is None else "")
-                + (f"_smc{particles}" if particles > 1 else ""))
+                + (f"_smc{particles}" if particles > 1 else "")
+                + (f"_post{args.length_posterior_power}"
+                   if length_cdf is not None else ""))
         if particles > 1:
             # One directory per particle slot, each a drop-in for the candidate pipeline:
             # validity needs a chemistry toolkit, so the choice among survivors is made
@@ -335,6 +360,15 @@ def main() -> None:
                         help="revise only where the AR model is this confident")
     parser.add_argument("--draft-max-prob", type=float, default=1.0,
                         help="and only where the diffusion readout is not")
+    parser.add_argument("--length-posterior", type=Path, default=None,
+                        help="n x k array of candidate lengths whose sibling *_probs.npy "
+                             "holds their probabilities. The canvas is then pinned by "
+                             "P(length <= position) instead of cut at the argmax, so one "
+                             "trajectory covers the posterior and the readout chooses the "
+                             "stop inside its support")
+    parser.add_argument("--length-posterior-power", type=float, default=1.0,
+                        help="raise the posterior to this power before pinning; above 1 "
+                             "narrows the uncertain band toward a hard length")
     parser.add_argument("--smc-particles", type=int, default=1,
                         help="carry this many trajectories per caption and let the "
                              "verifier reallocate compute among them during the solve. "
