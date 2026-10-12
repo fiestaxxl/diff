@@ -417,6 +417,33 @@ Against the published table this is the first configuration that beats MolT5-Bas
 **every** metric, and its validity of 0.949 is the highest in the table, above LDMol's
 0.941 and TGM-DLM's 0.871.
 
+### Ten candidates
+
+The ceiling is how often the true length is among the candidates: 19.5% at the argmax,
+63.2% in the top five, **83.6% in the top ten**. Doubling the pool moves every metric and
+costs nothing but sampling.
+
+| pool | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| 5 candidates | 0.770 | 0.120 | 19.48 | 0.770 | 0.624 | 0.537 | 0.80 | 0.949 |
+| **10 candidates** | **0.777** | **0.130** | **18.77** | **0.773** | **0.632** | **0.543** | **0.79** | **0.988** |
+
+7.60 of the 10 candidates parse on average, and only 37 captions of 3202 (1.2%) have no
+usable candidate at all — which is where validity of 0.988 comes from. The chosen rank is
+spread right across the pool (18% rank 0, 6% rank 9), so the later candidates are not
+padding the average; they are being picked.
+
+Against the published table, **validity of 0.988 is first by a wide margin** — the next
+best published number is 0.906 for the plain Transformer and 0.871 for TGM-DLM — and the
+row beats MolT5-Base on all eight metrics and T5-Base on seven of eight (Morgan 0.543
+against 0.545). TGM-DLM still leads on exact match and the fingerprints.
+
+Three things have to be said with it. The pool costs ten sampling runs per caption, so this
+is a test-time-compute result and belongs beside the compute it uses. Validity here is close
+to "at least one of ten candidates parses", which is a property of the procedure, not of a
+single forward pass. And this is **one seed**: by the rule at the top of this file it cannot
+be ranked against anything until two more are measured, which is running.
+
 ## Can the verifier act *during* the trajectory?
 
 Selection works after the fact. The obvious next question is whether the same model can

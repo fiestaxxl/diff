@@ -188,8 +188,29 @@ is the criterion and not the sample.
   (§4), so the method improves generalisation rather than retrieval.
 - Validity lands at 0.936–0.957 uniformly across strata.
 
-At 0.949, validity is the highest in the published table, above LDMol's 0.941 and TGM-DLM's
-0.871, and exact match of 0.121 is 2.8x the MolT5-base checkpoint we ran ourselves.
+**Scaling the pool.** The method is bounded by how often the true length is among the
+candidates: 19.5% at the argmax, 63.2% in the top five, 83.6% in the top ten. Doubling the
+pool moves every metric.
+
+| pool | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| 5 candidates | 0.770 | 0.120 | 19.48 | 0.770 | 0.624 | 0.537 | 0.80 | 0.949 |
+| **10 candidates** | **0.777** | **0.130** | **18.77** | **0.773** | **0.632** | **0.543** | **0.79** | **0.988** |
+
+An average of 7.6 of the 10 candidates parse, and only 37 captions of 3,202 (1.2%) have no
+usable candidate, which is where 0.988 comes from. The selected rank is spread across the
+whole pool — 18% at rank 0 down to 6% at rank 9 — so the later candidates are being chosen,
+not merely counted.
+
+At 0.988, validity is the highest in the published table by a wide margin: the next best are
+0.941 for LDMol, 0.906 for the plain Transformer and 0.871 for TGM-DLM. Exact match of 0.130
+is 3.0x the MolT5-base checkpoint we ran ourselves. The row beats MolT5-Base on all eight
+metrics and T5-Base on seven of eight.
+
+Three qualifications belong with it. The pool costs ten sampling runs per caption, so this
+is a test-time-compute result and must be read beside the compute it spends. Validity here
+is close to "at least one of ten candidates parses", a property of the procedure rather than
+of a single forward pass. And it is a single seed; the seeded group is in progress.
 
 ---
 
@@ -211,6 +232,8 @@ Nine interventions, all on the same backbone, all evaluated identically. The see
 | DPO, length-varying pairs | weights | 0.746 | 0.053 | **0.800** | validity only |
 | DPO, content-varying pairs | weights | 0.749 | 0.053 | **0.795** | validity only |
 | AR likelihood guidance (98% of score) | trajectory | 0.741 | 0.038 | 0.748 | no effect |
+| AR token clamping | trajectory | 0.582 | 0.028 | 0.627 | destroyed — by the clamping |
+| AR selective repaint | trajectory | — | — | — | byte-identical output |
 | **AR likelihood selection** | **after** | **0.770** | **0.121** | **0.949** | **works** |
 
 **The localising measurement.** With the canvas unpinned and the length supplied only as an
@@ -226,6 +249,27 @@ diffusion score's own norm (482 against 0.067 for the raw gradient, so a scale o
 changes **24% of molecules** by a mean of 2.06 characters — and improves nothing. The same
 model, ranking the same model's finished samples, improves exact match 2.3x. A model that
 is an excellent discriminator over completed samples is useless as a guide during sampling.
+
+**The decisive case: the sample is a fixed point.** Gradient guidance acts on a continuous
+state; clamping acts on a discrete one and destroys the molecule — and a control with an
+unreachable confidence threshold showed the damage came from the snapping itself, not from
+the verifier, since the numbers were identical with and without the verifier's opinion. That
+left one route that forces nothing. We decoded the finished sample, asked the verifier which
+positions it confidently disputes, re-noised **only those** back up the path, and let the
+diffusion produce them again with every other position pinned at its own value at each step,
+in the manner of RePaint. The verifier disputes 294 of 2210 real tokens (13.3%) across 62 of
+64 molecules, so the test is not vacuous.
+
+| re-noised back to α | 0.988 | 0.924 | 0.809 | 0.691 | 0.454 |
+|---|---|---|---|---|---|
+| disputed tokens that changed | 0 / 294 | 0 / 294 | 0 / 294 | 1 / 294 | 7 / 294 |
+
+Given the rest of the molecule, the model re-derives exactly the token it produced, from
+noise levels that destroy most of the signal. Zero, one and two repaint rounds, with and
+without gradient guidance, write byte-identical files. The disagreement between the two
+models is therefore not the diffusion being uncertain where the verifier is confident; the
+two hold stable, incompatible opinions. A position can only be overwritten, and overwriting
+is measured to destroy the molecule.
 
 **Reading.** Conditioning in this architecture governs what the readout can express, not
 where the trajectory goes. Interventions in the trajectory are absorbed; interventions after
