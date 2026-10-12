@@ -139,6 +139,20 @@ def build_task(
         "seq_len": seq_len,
     }
 
+    if task_name == "dpo":
+        # The reference model is attached after the checkpoint is loaded, in train.py:
+        # it has to be a copy of the weights training STARTS from, not of a fresh init.
+        return registry.tasks.build({
+            "name": "dpo",
+            "path": path,
+            "beta": float(loss_cfg.get("dpo_beta", 2000.0)),
+            "regime": str(diff_cfg.get("regime", "epsilon")),
+            "x0_noise_std": float(diff_cfg.get("x0_noise_std", 0.25)),
+            "caption_dropout": float(loss_cfg.get("caption_dropout", 0.0)),
+            "t_eps": float(diff_cfg.get("t_eps", 5e-5)),
+            **kwargs,
+        })
+
     if task_name == "ar":
         # caption_dropout matters for an AR model with a text path: it is what trains the
         # unconditional branch, exactly as in the diffusion recipe.

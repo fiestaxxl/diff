@@ -75,6 +75,31 @@ class SamplingParams:
                                   # drawing from it. Only honest when the length is known
                                   # or predicted; against a benchmark it is an oracle and
                                   # has to be labelled as one
+    ar_model: Optional[Any] = None  # a caption-conditioned autoregressive decoder whose
+                                  # log-likelihood gradient is added to the score. Six
+                                  # attempts to make the diffusion itself read the caption
+                                  # better all failed, while ranking finished samples by
+                                  # this model's likelihood took exact match from 0.052 to
+                                  # 0.121 -- so it holds caption information the diffusion
+                                  # does not use, and it was only ever consulted after the
+                                  # trajectory. This consults it during
+    ar_scale: float = 1.0         # how hard to push along that gradient
+    ar_start_alpha: float = 0.5   # leave guidance off while the x0 estimate is still
+                                  # uninformative and its token distribution near uniform
+    init_tokens: Optional[Any] = None   # (N, T) token ids to start the trajectory from
+                                  # instead of pure noise. A caption-retrieval baseline
+                                  # that generates nothing already beats published rows on
+                                  # every fingerprint metric here, which says retrieval
+                                  # finds the right neighbourhood; starting the reverse SDE
+                                  # from a retrieved molecule lets the diffusion spend its
+                                  # capacity on the details instead of rediscovering the
+                                  # neighbourhood. It also supplies a plausible length for
+                                  # free, and length is the largest lever measured on this
+                                  # task
+    init_t: float = 0.8           # where on the path to start. alpha = sin(pi t / 2), so
+                                  # t is how much SIGNAL survives, not how much noise is
+                                  # added: t=0.2 keeps 31% of the molecule, t=0.8 keeps
+                                  # 95%. Higher keeps more of the retrieved scaffold
     content_rule: str = "last_positive"  # how to turn the content channel into a stop.
                                   # "first_negative" truncates at the first position below
                                   # zero, which a single noisy position amputates: measured
@@ -234,6 +259,12 @@ def sample_smiles(
         )
     else:
         score_model = DenoiserModel(model, path, regime=params.regime)
+    if params.ar_model is not None:
+        from dimol.models.denoiser import ARGuidedDenoiserModel
+
+        score_model = ARGuidedDenoiserModel(
+            score_model, params.ar_model,
+            scale=params.ar_scale, start_alpha=params.ar_start_alpha)
     sde = LearnedScoreSDE(path, score_model, params.variance)
     if params.solver == "heun":
         # The carry lives on the wrapper, and only DenoiserModel has one to protect.
@@ -258,8 +289,14 @@ def sample_smiles(
             base = int(raw.config.vocab_size) - pad_variants
         pad_variant_ids = list(range(base, base + pad_variants))
         if decoder is not None and hasattr(decoder, "is_stop"):
+            # The variants live above the tokenizer's range by construction, so the
+            # decoder has to be widened to the model's vocabulary before they can be
+            # marked. Without this it raises an index error at generation time.
+            if hasattr(decoder, "widen_to"):
+                decoder.widen_to(int(raw.config.vocab_size))
             for i in pad_variant_ids:
-                decoder.is_stop[i] = True
+                if i < decoder.vocab_size:
+                    decoder.is_stop[i] = True
     if params.length_prior is not None:
         pad_embedding = raw.token_embedding.weight[pad_idx].detach()
         if getattr(raw, "content_channel", False):
@@ -274,8 +311,36 @@ def sample_smiles(
     while done < params.num_samples:
         b = min(batch_size, params.num_samples - done)
         x0 = path.p_simple.sample(b, seed=params.seed + done)
+
+        start_t = params.t_start
+        if params.init_tokens is not None:
+            # Noise the retrieved molecule to init_t and start there, rather than from
+            # pure noise at t_start. The solver then only has to travel the remaining
+            # distance, so what survives is whatever the caption does not contradict.
+            ids = torch.as_tensor(params.init_tokens, dtype=torch.long)[done : done + b]
+            ids = ids.to(device).clamp(0, raw.config.vocab_size - 1)
+            seed_latent = raw.token_embedding(ids).detach()
+            if seed_latent.shape[-1] < x0.shape[-1]:
+                # A content channel, if the model has one: positive where the retrieved
+                # molecule has content, negative past its end.
+                scale = raw.token_embedding.weight.detach().pow(2).mean().sqrt()
+                content = torch.where(ids == pad_idx, -scale, scale).unsqueeze(-1)
+                seed_latent = torch.cat((seed_latent, content), dim=-1)
+            start_t = float(params.init_t)
+            t_vec = torch.full((b, 1, 1), start_t, device=device)
+            alpha, beta = path.alpha(t_vec), path.beta(t_vec)
+            noise = torch.randn(seed_latent.shape, device=device,
+                                generator=torch.Generator(device=device).manual_seed(
+                                    params.seed + done))
+            x0 = alpha * seed_latent + beta * noise
+
+        grid = _time_grid(params)
+        if params.init_tokens is not None:
+            # Rebuild the grid over what is left of the path.
+            u = (grid - params.t_start) / max(params.t_end - params.t_start, 1e-8)
+            grid = start_t + (params.t_end - start_t) * u
         ts = (
-            _time_grid(params)
+            grid
             .view(1, params.num_timesteps, 1, 1)
             .expand(b, -1, -1, -1)
             .to(device)

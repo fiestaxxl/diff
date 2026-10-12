@@ -45,6 +45,7 @@ from dimol.training.distributed import (  # noqa: E402
     destroy_distributed,
     init_distributed,
     seed_all,
+    unwrap_model,
 )
 from dimol.training.trainer import Trainer  # noqa: E402
 
@@ -178,7 +179,9 @@ def main(cfg: DictConfig) -> None:
     # ---- probability path and task ----
     autocast = _autocast_factory(cfg, env.device_type)
     path = None
-    if str(cfg.task) == "diffusion":
+    # Preference optimisation runs the same forward diffusion as training does, so it
+    # needs the same probability path.
+    if str(cfg.task) in ("diffusion", "dpo"):
         emb_dim = int(cfg.model["emb_dim"])
         path = build_path(cfg, seq_len=seq_len, emb_dim=emb_dim, device=env.device)
     task = build_task(
@@ -227,6 +230,17 @@ def main(cfg: DictConfig) -> None:
         scaler=_build_scaler(cfg, env.device_type),
     )
     trainer.maybe_resume()
+
+    if hasattr(task, "set_reference"):
+        # Preference optimisation compares the trained model against the weights it
+        # started from, so the reference is copied AFTER the checkpoint is loaded.
+        # Copying a freshly initialised model instead would make the loss meaningless.
+        import copy as _copy
+
+        reference = _copy.deepcopy(unwrap_model(model)).to(env.device)
+        task.set_reference(reference)
+        print(f"[dpo] frozen reference taken from the loaded weights "
+              f"({sum(p.numel() for p in reference.parameters()) / 1e6:.1f}M params)")
     try:
         trainer.fit()
     finally:

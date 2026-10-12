@@ -167,3 +167,132 @@ class GuidedDenoiserModel(nn.Module):
 
         self._x0_self = x0_pred.detach()
         return (alpha_t * x0_pred - x) / (beta_t ** 2)
+
+
+class ARGuidedDenoiserModel(nn.Module):
+    """Score guided by a caption-conditioned autoregressive model.
+
+    The measured case for this. Six attempts to make the diffusion itself use the caption
+    better -- a content channel in the latent, global conditioning through adaLN, starting
+    the trajectory from a retrieved molecule, task-adapted caption features, distinct
+    padding, and preference optimisation -- all landed inside seed noise or below it. One
+    intervention worked: ranking several finished samples by log p(SMILES | caption) under
+    a small autoregressive decoder, which took exact match from 0.052 to 0.121. So the
+    autoregressive model holds caption information the diffusion does not use, and it was
+    only ever consulted after the trajectory had finished, when nothing could be changed.
+
+    This consults it during the trajectory instead. At each solver step the current x0
+    estimate goes through the readout to a distribution over tokens; that distribution is
+    fed to the autoregressive model as a SOFT embedding, p @ token_embedding, which keeps
+    the whole path differentiable back to the latent; and the gradient of the caption
+    log-likelihood is added to the score.
+
+        score_guided = score(x, t) + scale * grad_x log p_ar(tokens(x) | caption)
+
+    This is the same shape as the energy guidance in the predecessor work, where the guide
+    was a hand-built grammar energy worth about seven points of validity. Here the guide is
+    a learned conditional likelihood, and it is aimed at exact match -- the one metric a
+    caption-retrieval baseline cannot reach, and therefore the one that measures generation
+    rather than lookup.
+
+    ``start_alpha`` keeps the guidance off early in the reverse process, where the x0
+    estimate carries no information and its token distribution is nearly uniform, so the
+    gradient would be noise.
+    """
+
+    def __init__(self, base, ar_model, *, scale=1.0,
+                 start_alpha=0.5, temperature=1.0):
+        super().__init__()
+        self.base = base
+        self.ar_model = ar_model
+        for p in self.ar_model.parameters():
+            p.requires_grad_(False)
+        self.ar_model.eval()
+        self.scale = float(scale)
+        self.start_alpha = float(start_alpha)
+        self.temperature = float(temperature)
+        self.report = None   # set to a list to collect (|score|, |grad|, alpha) per step
+
+    def reset(self):
+        if hasattr(self.base, "reset"):
+            self.base.reset()
+
+    # The sampler sets these per batch on whatever object it was handed, so they are
+    # forwarded to the base model rather than stored here: holding the whole split would
+    # pair a 250-molecule batch with 3,202 captions.
+    @property
+    def length(self):
+        return getattr(self.base, "length", None)
+
+    @length.setter
+    def length(self, value):
+        self.base.length = value
+
+    @property
+    def text(self):
+        return getattr(self.base, "text", None)
+
+    @text.setter
+    def text(self, value):
+        self.base.text = value
+
+    @property
+    def text_mask(self):
+        return getattr(self.base, "text_mask", None)
+
+    @text_mask.setter
+    def text_mask(self, value):
+        self.base.text_mask = value
+
+    def forward(self, x, t, **kwargs):
+        from dimol.training.distributed import unwrap_model
+
+        score = self.base(x, t, **kwargs)
+        alpha = self.base.path.alpha(t)
+        if float(alpha.mean()) < self.start_alpha or self.scale == 0.0:
+            return score
+
+        raw = unwrap_model(self.base.eps_model)
+        beta = torch.clamp(self.base.path.beta(t), min=1e-3)
+        alpha_c = torch.clamp(alpha, min=1e-3)
+
+        with torch.enable_grad():
+            x_grad = x.detach().requires_grad_(True)
+            # The base model's own x0 estimate, rebuilt from the prediction at x_grad so
+            # the gradient reaches the latent.
+            forward_kwargs = dict(kwargs)
+            if self.text is not None:
+                forward_kwargs.setdefault("text", self.text)
+                forward_kwargs.setdefault("text_mask", self.text_mask)
+            if getattr(raw, "length_conditioning", False) and self.length is not None:
+                forward_kwargs.setdefault("length", self.length)
+            pred = raw(x_grad, t.squeeze(-1), **forward_kwargs)
+            if self.base.regime == "epsilon":
+                x0 = (x_grad - beta * pred) / alpha_c
+            else:
+                x0 = pred
+            emb_dim = raw.token_embedding.weight.shape[-1]
+            logits = raw.out_proj(x0[..., :emb_dim])
+            probs = torch.softmax(logits / self.temperature, dim=-1)
+
+            ar = unwrap_model(self.ar_model)
+            soft = probs @ ar.token_embedding.weight
+            ar_logits = ar(inputs_embeds=soft[:, :-1], text=self.text,
+                           text_mask=self.text_mask)
+            target = probs[:, 1:]
+            logp = torch.log_softmax(ar_logits.float(), dim=-1)
+            # Expected log-likelihood of the next token under the diffusion's own
+            # distribution: a soft version of "how plausible is this string to the
+            # autoregressive model, given the caption".
+            objective = (target * logp).sum(-1).mean()
+            grad = torch.autograd.grad(objective, x_grad)[0]
+
+        guided = score + self.scale * grad.detach()
+        if self.report is not None:
+            # The score is (alpha * x0 - x) / beta^2, which is enormous at small beta,
+            # so the guidance scale has to be read against it rather than guessed. Without
+            # this the first sweep ran at scales 0 to 100 and produced bit-identical
+            # samples, because the term contributed nothing.
+            self.report.append((float(score.norm()), float(grad.norm()),
+                                float(alpha.mean())))
+        return guided

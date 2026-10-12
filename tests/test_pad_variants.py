@@ -87,3 +87,31 @@ def test_every_variant_ends_the_molecule_in_the_decoder():
     decoder = build_decoder(_Tok(), canvas=SEQ, mode="grammar_close")
     for i in range(VOCAB - VARIANTS, VOCAB):
         assert decoder.is_stop[i], f"id {i} should stop the molecule"
+
+
+def test_the_decoder_widens_to_the_model_vocabulary():
+    """The variants sit above the tokenizer's range, so the decoder must grow to reach
+    them. Before this, generation raised IndexError on the first padding variant."""
+    from dimol.eval.decoding import build_decoder
+
+    class _Tok:
+        pad_id, eos_id, bos_id, unk_id, mask_id = 0, 1, 2, 3, 4
+        vocab_size = 30
+
+        def get_vocab(self):
+            return {f"t{i}": i for i in range(30)}
+
+        def id_to_token(self, i):
+            return f"t{i}"
+
+    decoder = build_decoder(_Tok(), canvas=SEQ, mode="grammar_close")
+    assert decoder.vocab_size == 30
+    decoder.widen_to(40)
+    assert decoder.vocab_size == 40
+    for array in (decoder.delta, decoder.lowest, decoder.is_special,
+                  decoder.is_banned, decoder.is_stop):
+        assert len(array) == 40
+    assert decoder.parity.shape[0] == 40
+    decoder.is_stop[38] = True          # would have raised before widening
+    decoder.widen_to(20)                # narrowing is a no-op
+    assert decoder.vocab_size == 40

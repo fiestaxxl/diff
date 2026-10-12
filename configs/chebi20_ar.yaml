@@ -49,7 +49,8 @@ variables:
                                # audit put the training p99 at 37 tokens and the max at
                                # 62, so 64 loses nothing (docs/tokenizer-zinc250k.md)
   data_dir: data/chebi20/tokenized               # where <split>_tokens_*.npy live
-  tokenizer_path: data/zinc250k/tokenizers/bpe_384_alpha.json
+  tokenizer_path: data/shared/tokenizers/zinc20_chebi.json   # the tokenizer this
+                               # corpus was actually tokenized with, 635 tokens
   vocab_size: 640              # the shared ZINC-20 + ChEBI tokenizer has 630 tokens,
                                # the extra rows simply never get used
   pad_idx: 0

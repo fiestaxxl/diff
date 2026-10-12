@@ -21,7 +21,7 @@ CONFIGS = sorted((Path(__file__).resolve().parents[1] / "configs").glob("*.yaml"
 def test_config_loads(path: Path) -> None:
     cfg = load_config(path)
     assert cfg.run_name
-    assert cfg.task in ("diffusion", "ar")
+    assert cfg.task in ("diffusion", "ar", "dpo")
     assert str(cfg.precision) in ("amp_bf16", "amp_fp16", "fp32")
 
 

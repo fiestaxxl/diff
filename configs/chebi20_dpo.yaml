@@ -1,0 +1,127 @@
+# Preference optimisation on top of a finished ChEBI-20 fine-tune.
+#
+# Why. The diffusion objective is an MSE in latent space, and across eleven configurations
+# it correlated with sample quality at r = +0.46 -- the wrong sign. What is minimised is
+# not what is measured. And the metric worth optimising is exact match specifically: a
+# caption-retrieval baseline that generates nothing reaches BLEU 0.786, MACCS 0.785 and
+# FCD 0.48 on this benchmark, above the published MolT5-base row on each, while scoring
+# 0.004 on exact match. Fingerprint similarity is reachable by lookup; exact match is not.
+#
+#   python scripts/build_preferences.py --config configs/chebi20_finetune.yaml \
+#       --dirs scratch/train_cand_k0 ... --split train --out data/chebi20/prefs
+#   bash scripts/train.sh configs/chebi20_dpo.yaml load_path=runs/cepad_s43/ep2020-ba200000
+#
+# load_path is REQUIRED and is both the starting point and the frozen reference, so a run
+# from a fresh initialisation is meaningless here.
+
+run_name: chebi_dpo
+task: dpo
+seed: 42
+
+variables:
+  seq_len: 128
+  data_dir: data/chebi20/prefs          # written by scripts/build_preferences.py
+  tokenizer_path: data/shared/tokenizers/zinc20_chebi.json
+  vocab_size: 640
+  pad_idx: 0
+
+tokenizer:
+  path: ${variables.tokenizer_path}
+
+model:
+  name: diffusion_transformer
+  model_dim: 640
+  emb_dim: 32
+  time_dim: 256
+  num_heads: 10
+  num_text_blocks: 8
+  tie_readout: false
+  length_conditioning: true
+  text_dim: 768
+  pad_variants: 1
+  pad_variant_base: 0
+  content_channel: false
+  text_global: false
+  self_conditioning: true
+  vocab_size: ${variables.vocab_size}
+  pad_idx: ${variables.pad_idx}
+  max_pos: 128
+  attn_dropout: 0.0
+
+diffusion:
+  name: vp_cosine
+  p_simple: gaussian
+  regime: epsilon
+  x0_noise_std: 0.25
+  t_eps: 5.0e-5
+
+loss:
+  dpo_beta: 2000.0             # multiplies a difference of per-sample MSEs over a
+                               # 32-dimensional latent, which are small numbers
+  caption_dropout: 0.0         # no dropout here: a preference is about what the caption
+                               # asked for, so dropping it would compare two molecules
+                               # against no question at all
+  label_smoothing: 0.0
+  autocast_scope: loss
+
+train_loader:
+  dataset:
+    name: preference_text_npy
+    data_dir: ${variables.data_dir}
+    split: train
+  shuffle: true
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  bucket_by_length: false
+
+eval_loader: null              # validation loss does not rank models here; the honest
+                               # progress signal is the share of pairs ordered correctly,
+                               # which the task reports every step
+
+optimizer:
+  name: adamw
+  lr: 1.0e-6                   # preference updates are small by design: the reference is
+                               # what keeps this a preference rather than a fine-tune
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  eps: 1.0e-8
+
+scheduler:
+  name: warmup_cosine
+  t_warmup: 200ba
+  t_max: 4000ba
+  max_lr: 1.0e-6
+  min_lr: 1.0e-7
+
+algorithms:
+  gradient_clipping:
+    clipping_type: norm
+    clipping_threshold: 1.0
+
+max_duration: 4000ba
+global_train_batch_size: 64
+device_train_microbatch_size: 16
+device_eval_batch_size: 64
+
+precision: amp_bf16
+tf32: true
+compile: false
+
+eval_interval: 100000ba
+save_interval: 500ba
+save_num_checkpoints_to_keep: -1
+autoresume: false
+load_weights_only: true
+load_path: null                # REQUIRED on the command line
+
+loggers:
+  console:
+    console_log_interval: 10ba
+  jsonl: {}
+
+save_folder: checkpoints
+sampling:
+  enabled: false

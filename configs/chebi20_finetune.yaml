@@ -49,7 +49,15 @@ variables:
                                # audit put the training p99 at 37 tokens and the max at
                                # 62, so 64 loses nothing (docs/tokenizer-zinc250k.md)
   data_dir: data/chebi20/tokenized               # where <split>_tokens_*.npy live
-  tokenizer_path: data/zinc250k/tokenizers/bpe_384_alpha.json
+  tokenizer_path: data/shared/tokenizers/zinc20_chebi.json
+                               # the SHARED ZINC-20 + ChEBI tokenizer, 635 tokens, which is
+                               # what tokenized this corpus. Pointing this at the 391-token
+                               # ZINC-250k tokenizer -- which it did -- silently mis-decodes
+                               # 196 of 3,202 test references (6.1%): 75 become unparseable
+                               # and 121 become a DIFFERENT molecule, because salts,
+                               # hydrates, charged nitrogen and metals all live above id
+                               # 386. It also truncates the decoder's logits to 386, so no
+                               # generated string could ever contain a disconnection dot.
   vocab_size: 640              # the shared ZINC-20 + ChEBI tokenizer has 630 tokens,
                                # the extra rows simply never get used
   pad_idx: 0

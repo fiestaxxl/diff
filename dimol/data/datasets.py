@@ -202,3 +202,48 @@ class PairedSmilesTextDataset(SmilesDataset):
 registry.datasets.register("smiles_npy")(SmilesDataset)
 registry.datasets.register("smiles_text_npy")(PairedSmilesTextDataset)
 registry.datasets.register("random")(SimpleDataset)
+
+
+@registry.datasets.register("preference_text_npy")
+class PreferenceSmilesTextDataset(PairedSmilesTextDataset):
+    """A winning and a losing molecule for one caption, for preference optimisation.
+
+    Adds to the paired layout, written by scripts/build_preferences.py:
+
+        <data_dir>/<split>_rejected_tokens.npy      (N, T) int64
+        <data_dir>/<split>_rejected_attn_mask.npy   (N, T) uint8
+
+    The accepted molecule occupies the ordinary token arrays, so anything that reads this
+    as a plain paired dataset still trains on the better of the two. The caption states are
+    the originals, reached through the text index, because the pairs are a subset of the
+    split and copying 5 GB of SciBERT states per subset is not worth it.
+    """
+
+    def __init__(self, data_dir: str | Path, split: str, mmap: bool = True):
+        super().__init__(data_dir, split, mmap=mmap)
+        directory = Path(data_dir)
+        how = "r" if mmap else None
+        rejected = directory / f"{split}_rejected_tokens.npy"
+        rejected_mask = directory / f"{split}_rejected_attn_mask.npy"
+        for path in (rejected, rejected_mask):
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} is missing; run scripts/build_preferences.py"
+                )
+        self.rejected = np.load(rejected, mmap_mode=how)
+        self.rejected_mask = np.load(rejected_mask, mmap_mode=how)
+        if len(self.rejected) != self.num_samples:
+            raise ValueError(
+                f"split {split!r}: {self.num_samples} accepted molecules but "
+                f"{len(self.rejected)} rejected ones"
+            )
+
+    def __getitem__(self, idx: int) -> dict:
+        item = super().__getitem__(idx)
+        if idx < 0:
+            idx += self.num_samples
+        item["rejected_token_ids"] = torch.from_numpy(
+            np.asarray(self.rejected[idx], dtype=np.int64))
+        item["rejected_attention_mask"] = torch.from_numpy(
+            np.asarray(self.rejected_mask[idx], dtype=np.int64))
+        return item

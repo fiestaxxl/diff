@@ -138,6 +138,32 @@ class GrammarConstrainedDecoder:
             if idx is not None and idx < self.vocab_size:
                 self.is_stop[idx] = True
 
+    def widen_to(self, vocab_size: int) -> None:
+        """Grow every per-token array to the model's vocabulary.
+
+        The decoder sizes itself from the tokenizer, but a model can carry rows the
+        tokenizer has no name for: distinct padding variants live above the tokenizer's
+        range by construction. Those rows still appear in the readout's logits, so the
+        decoder has to be able to index them, and they end the molecule rather than
+        extending it.
+        """
+        if vocab_size <= self.vocab_size:
+            return
+        extra = vocab_size - self.vocab_size
+
+        def grow(array, fill=0):
+            return np.concatenate([array, np.full(extra, fill, dtype=array.dtype)])
+
+        self.delta = grow(self.delta)
+        self.lowest = grow(self.lowest)
+        self.parity = np.concatenate(
+            [self.parity,
+             np.zeros((extra, self.parity.shape[1]), dtype=self.parity.dtype)])
+        self.is_special = grow(self.is_special, False)
+        self.is_banned = grow(self.is_banned, False)
+        self.is_stop = grow(self.is_stop, False)
+        self.vocab_size = vocab_size
+
     def decode(self, logits: torch.Tensor, chunk: int = 2000,
                min_length: Optional[torch.Tensor] = None) -> List[str]:
         """logits: (B, L, V) -> list of SMILES strings.

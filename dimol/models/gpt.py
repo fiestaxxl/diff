@@ -176,18 +176,35 @@ class SmilesAR(nn.Module):
             if getattr(m, "weight", None) is not None: nn.init.ones_(m.weight)
             if getattr(m, "bias",   None) is not None: nn.init.zeros_(m.bias)
 
-    def forward(self, token_ids: torch.Tensor, text=None, text_mask=None) -> torch.Tensor:
+    def forward(self, token_ids: torch.Tensor = None, text=None, text_mask=None,
+                inputs_embeds: torch.Tensor = None) -> torch.Tensor:
         """token_ids: (B, L) -> logits: (B, L, V).
+
+        ``inputs_embeds`` replaces the token lookup with embeddings supplied directly,
+        which is what lets a diffusion sampler pass a SOFT distribution over tokens
+        through this model: p @ token_embedding is differentiable with respect to the
+        diffusion latent, so the gradient of log p(SMILES | caption) can be taken all the
+        way back and added to the reverse SDE's drift. With ids the behaviour is
+        unchanged.
         logits[:, i, :] = p(token at position i+1 | tokens[:, :i+1]) via causal mask.
         For grammar-guidance use, the prediction *for* position i is logits[:, i-1, :].
         """
-        B, L = token_ids.shape
-        pos = torch.arange(L, device=token_ids.device)
+        if (token_ids is None) == (inputs_embeds is None):
+            raise ValueError("pass exactly one of token_ids or inputs_embeds")
+        if inputs_embeds is not None:
+            B, L, _ = inputs_embeds.shape
+            device = inputs_embeds.device
+        else:
+            B, L = token_ids.shape
+            device = token_ids.device
+        pos = torch.arange(L, device=device)
         if text is not None and not self.config.text_dim:
             raise ValueError(
                 "a caption was passed but model.text_dim is 0; this model has no text path"
             )
-        x = self.token_embedding(token_ids) + self.pos_embedding(pos)[None]
+        embedded = (inputs_embeds if inputs_embeds is not None
+                    else self.token_embedding(token_ids))
+        x = embedded + self.pos_embedding(pos)[None]
         for blk in self.blocks:
             x = blk(x, text=text, text_mask=text_mask)
         x = self.norm(x)

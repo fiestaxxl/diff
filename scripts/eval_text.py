@@ -106,6 +106,15 @@ def stage_generate(args) -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "reference.txt").write_text("\n".join(references) + "\n")
 
+    ar_guide = None
+    if args.ar_guide is not None:
+        from dimol.models.gpt import SmilesAR
+
+        ar_guide = SmilesAR.from_pretrained(load_dir=str(args.ar_guide),
+                                            map_location=device).to(device).eval()
+        print(f"  AR guidance from {args.ar_guide} "
+              f"(scale {args.ar_scale}, from alpha {args.ar_start_alpha})")
+
     predicted_lengths = None
     if args.length_file is not None:
         # Lengths from any external predictor, one row per caption in split order. This
@@ -148,6 +157,11 @@ def stage_generate(args) -> None:
             num_samples=n, batch_size=args.batch_size, num_timesteps=args.steps,
             decode="grammar_close", strict=True, seed=args.seed, solver=args.solver,
             content_rule=args.content_rule,
+            ar_model=ar_guide, ar_scale=args.ar_scale,
+            ar_start_alpha=args.ar_start_alpha,
+            init_tokens=(np.load(args.init_tokens)[:n]
+                         if args.init_tokens is not None else None),
+            init_t=args.init_t,
             text=np.asarray(text[:n], dtype=np.float32)[caption_index],
             text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
             guidance=float(scale),
@@ -160,6 +174,8 @@ def stage_generate(args) -> None:
                 + ("_heun" if args.solver == "heun" else "")
                 + ("_shuffled" if args.shuffle_captions else "")
                 + ("_oraclelen" if args.oracle_length else "")
+                + (f"_arg{args.ar_scale}" if args.ar_guide is not None else "")
+                + (f"_init{args.init_t}" if args.init_tokens is not None else "")
                 + ("_filelen" if args.length_file is not None else "")
                 + ("_headlen" if args.length_head is not None
                    and args.length_file is None else ""))
@@ -233,6 +249,24 @@ def main() -> None:
                         help="npy array of predicted lengths, one per caption in split "
                              "order, from scripts/train_length_encoder.py. Takes "
                              "precedence over --length-head")
+    parser.add_argument("--ar-guide", type=Path, default=None,
+                        help="checkpoint of a caption-conditioned autoregressive model "
+                             "whose log-likelihood gradient steers the reverse SDE. "
+                             "Ranking finished samples by this model took exact match "
+                             "from 0.052 to 0.121; this consults it during the trajectory "
+                             "instead of after it")
+    parser.add_argument("--ar-scale", type=float, default=1.0)
+    parser.add_argument("--ar-start-alpha", type=float, default=0.5,
+                        help="leave guidance off until the x0 estimate carries signal")
+    parser.add_argument("--init-tokens", type=Path, default=None,
+                        help="npy of (N, T) token ids to start the reverse SDE from, "
+                             "instead of pure noise: a retrieved molecule, noised to "
+                             "--init-t. Retrieval already reaches the fingerprint metrics "
+                             "on this benchmark, so this hands the diffusion the "
+                             "neighbourhood and asks it only for the details")
+    parser.add_argument("--init-t", type=float, default=0.5,
+                        help="how far back to noise the starting molecule; lower keeps "
+                             "more of it")
     parser.add_argument("--content-rule", default="last_positive",
                         choices=("first_negative", "last_positive", "run_2", "run_3",
                                  "run_5"),

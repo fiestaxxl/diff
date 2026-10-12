@@ -39,6 +39,13 @@ def trim_collate(
 
     stored_len = int(mask.shape[1])
     real_len = int(mask.sum(dim=1).max())
+    # A preference batch carries a second molecule on the same canvas, and it may be the
+    # longer one. Trimming to the accepted molecule's length would silently truncate the
+    # rejected one into a different molecule, which is exactly the comparison the loss
+    # depends on.
+    rejected_mask = out.get("rejected_attention_mask")
+    if rejected_mask is not None:
+        real_len = max(real_len, int(rejected_mask.sum(dim=1).max()))
     target = max(min_len, -(-real_len // multiple_of) * multiple_of)  # ceil to multiple
     target = min(target, stored_len)
     if target >= stored_len:
