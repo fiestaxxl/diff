@@ -296,3 +296,131 @@ class ARGuidedDenoiserModel(nn.Module):
             self.report.append((float(score.norm()), float(grad.norm()),
                                 float(alpha.mean())))
         return guided
+
+
+class ARClampedDenoiserModel(nn.Module):
+    """Clamping the x0 estimate to the token an autoregressive decoder prefers.
+
+    The measurement this is built on. Ranking finished samples by log p(SMILES | caption)
+    under a small autoregressive decoder takes exact match from 0.052 to 0.121. Feeding the
+    same model's gradient into the reverse SDE, at a magnitude equal to the diffusion
+    score's own norm, changes 24% of molecules and improves nothing. The difference is what
+    the autoregressive model is shown: it was trained on discrete, complete token
+    sequences, and a soft mixture ``p @ E`` is off its manifold. It is an excellent judge
+    of strings and a useless judge of latents.
+
+    So this hands it strings. Diffusion-LM clamping already snaps the x0 estimate onto the
+    nearest token embedding at every late step -- the one place a continuous sampler
+    touches discreteness. Here the snap target is not the nearest embedding but the token
+    the autoregressive model prefers, given the draft's own prefix and the caption:
+
+        draft      = argmax(out_proj(x0))
+        logits_ar  = ar(draft, caption)            one forward pass, no gradients
+        combined   = out_proj(x0) + weight * logits_ar_shifted
+        x0         <- token_embedding(argmax(combined))
+
+    The diffusion proposes the whole canvas in parallel, the autoregressive model revises
+    it left to right, and the trajectory continues from the revision. That is the structure
+    of speculative decoding, applied at every solver step rather than once at the end.
+
+    ``weight`` is in logit units and both terms are log-odds over the same vocabulary, so
+    1.0 weighs the two models equally. ``from_alpha`` keeps the revision off while the x0
+    estimate carries no signal and its draft would be noise.
+    """
+
+    def __init__(self, eps_model, path, ar_model, *, regime="epsilon", weight=1.0,
+                 strength=1.0, from_alpha=0.5, pad_idx=0,
+                 ar_min_prob=0.0, draft_max_prob=1.0):
+        super().__init__()
+        self.eps_model = eps_model
+        self.path = path
+        self.ar_model = ar_model
+        for p in self.ar_model.parameters():
+            p.requires_grad_(False)
+        self.ar_model.eval()
+        self.regime = regime
+        self.weight = float(weight)
+        self.strength = float(strength)
+        self.from_alpha = float(from_alpha)
+        self.pad_idx = int(pad_idx)
+        # Speculative decoding accepts the draft by default and intervenes only where the
+        # verifier confidently objects. Forcing every disagreement is not that: measured
+        # per-position agreement between these two models on the diffusion's own finished
+        # samples is 80.8%, so rewriting every disagreement edits about a fifth of the
+        # molecule at EVERY solver step, and the sample collapses -- validity 0.788 to
+        # 0.13. These two thresholds restrict the edit to positions where the
+        # autoregressive model is confident AND the diffusion readout is not.
+        self.ar_min_prob = float(ar_min_prob)
+        self.draft_max_prob = float(draft_max_prob)
+        self._x0_self = None
+        self.length = None
+        self.text = None
+        self.text_mask = None
+        self.revised = 0      # tokens the autoregressive model changed, for reporting
+        self.seen = 0
+
+    def reset(self):
+        self._x0_self = None
+
+    @torch.no_grad()
+    def forward(self, x, t, **kwargs):
+        from dimol.training.distributed import unwrap_model
+
+        raw = unwrap_model(self.eps_model)
+        alpha_t = torch.clamp(self.path.alpha(t), min=1e-3)
+        beta_t = torch.clamp(self.path.beta(t), min=1e-3)
+        t_in = t.squeeze(-1)
+
+        if getattr(raw, "self_conditioning", False):
+            kwargs["x0_self"] = self._x0_self
+        if getattr(raw, "length_conditioning", False) and self.length is not None:
+            kwargs["length"] = self.length
+        if self.text is not None:
+            kwargs.setdefault("text", self.text)
+            kwargs.setdefault("text_mask", self.text_mask)
+
+        pred = self.eps_model(x, t_in, **kwargs)
+        if self.regime == "epsilon":
+            x0 = (x - beta_t * pred) / alpha_t
+        else:
+            x0 = pred
+        self._x0_self = x0.detach()
+
+        if self.weight != 0.0 and float(alpha_t.mean()) > self.from_alpha:
+            emb_dim = raw.token_embedding.weight.shape[-1]
+            logits = raw.out_proj(x0[..., :emb_dim]).float()
+            draft = logits.argmax(-1)
+
+            ar = unwrap_model(self.ar_model)
+            ar_logits = ar(draft[:, :-1], text=self.text, text_mask=self.text_mask).float()
+            # ar_logits[:, i] predicts position i+1, so position 0 keeps the diffusion's
+            # own opinion and the rest are shifted into place.
+            shifted = torch.zeros_like(logits)
+            shifted[:, 1:] = ar_logits
+
+            combined = logits + self.weight * shifted
+            revised = combined.argmax(-1)
+
+            # Accept the draft unless the autoregressive model is confident and the
+            # diffusion is not.
+            if self.ar_min_prob > 0.0 or self.draft_max_prob < 1.0:
+                ar_prob = torch.zeros_like(logits[..., 0])
+                ar_prob[:, 1:] = ar_logits.softmax(-1).max(-1).values
+                draft_prob = logits.softmax(-1).max(-1).values
+                allow = (ar_prob >= self.ar_min_prob) & (draft_prob <= self.draft_max_prob)
+                revised = torch.where(allow, revised, draft)
+
+            # Never let the revision invent content where the draft had padding: the
+            # length is supplied separately and the canvas tail is not the AR model's to
+            # fill.
+            revised = torch.where(draft == self.pad_idx, draft, revised)
+
+            self.revised += int((revised != draft).sum())
+            self.seen += int(revised.numel())
+
+            snapped = raw.token_embedding(revised)
+            if snapped.shape[-1] < x0.shape[-1]:
+                snapped = torch.cat((snapped, x0[..., snapped.shape[-1]:]), dim=-1)
+            x0 = x0 + self.strength * (snapped - x0)
+
+        return (alpha_t * x0 - x) / (beta_t ** 2)

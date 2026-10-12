@@ -417,6 +417,62 @@ Against the published table this is the first configuration that beats MolT5-Bas
 **every** metric, and its validity of 0.949 is the highest in the table, above LDMol's
 0.941 and TGM-DLM's 0.871.
 
+## Can the verifier act *during* the trajectory?
+
+Selection works after the fact. The obvious next question is whether the same model can
+steer the sample while it is being produced, which would make the hybrid generative rather
+than a re-ranking wrapper. Four routes were tried. All four fail, and they fail for one
+reason, which is worth more than any of them individually.
+
+First, how much do the two models actually disagree? Per position, on greedy argmax:
+
+| the verifier is asked about | agreement |
+|---|---|
+| finished diffusion samples | 80.8% |
+| real ChEBI-20 molecules | 92.7% |
+| MolT5-base samples | 45.3% |
+
+So the verifier would rewrite about one position in five of our samples. That is far too
+many to force, and the measurements bear it out.
+
+| route | what it does | result |
+|---|---|---|
+| gradient guidance | adds `∇ log p_AR` to the reverse drift | at 98% of the score norm it changes 24% of molecules and improves nothing; below that it changes nothing. the score norm is about 482 against a gradient norm of 0.067, a ratio of 7×10³ |
+| discrete clamping | snaps the x0 estimate to the verifier's token each step | destroys the sample — **and a control with an unreachable threshold proved the damage is the snapping, not the verifier**: identical numbers with and without it (0.302 / 0.028 / 38.07 / 0.582 / 0.627) |
+| selective repaint | re-noises only the disputed positions and lets the diffusion redo them, holding the rest of the molecule fixed | **nothing moves** |
+| particle filtering | carries several trajectories and reallocates compute by verifier score | see below |
+
+The repaint measurement is the one that explains the rest. On 64 captions the verifier
+confidently disputes **294 of 2210 real tokens (13.3%), in 62 of 64 molecules**. Those
+positions were re-noised and re-solved for 40 steps with the rest of the molecule pinned
+at its own value at every step:
+
+| re-noised back to | alpha | disputed tokens that changed | of those, matching the verifier |
+|---|---|---|---|
+| t = 0.90 | 0.988 | 0 of 294 | 0 |
+| t = 0.75 | 0.924 | 0 of 294 | 0 |
+| t = 0.60 | 0.809 | 0 of 294 | 0 |
+| t = 0.45 | 0.691 | 1 of 294 | 0 |
+| t = 0.30 | 0.454 | 7 of 294 | 2 |
+
+**The sample is a fixed point of its own dynamics, position by position.** Given the rest
+of the molecule, the model re-derives exactly the token it produced, from noise levels that
+destroy most of the signal. Six configurations — zero, one and two rounds, with gradient
+guidance on and off — produced byte-identical output files.
+
+This reframes the disagreement. It is not that the diffusion is uncertain where the
+verifier is confident; the two models hold stable, incompatible opinions. A position can
+therefore only be *overwritten*, and overwriting is measured to destroy the molecule. What
+is left is to choose among whole states, which is the one thing the verifier is measured to
+do well — and selection at the end already works. The open question is whether selection
+*during* the trajectory beats selection at the end, which is what the particle filter asks.
+
+Caveat on the record: the first repaint sweep (1000 captions, four settings on four cards)
+reported one run differing from its three siblings on 479 of 1000 molecules, with a mean
+length difference of 8 characters — entirely different molecules, not numerical drift. The
+controlled six-way comparison says that cannot happen. That sweep is therefore not trusted
+and is being rerun sequentially on one card; **no number from it is used here.**
+
 ## Retracted claims
 
 Kept here because each was stated with confidence before being measured properly.

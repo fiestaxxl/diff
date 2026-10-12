@@ -35,6 +35,8 @@ over the ts grid -> out_proj -> argmax -> decode_batch(special_decode=True).
 """
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -84,6 +86,46 @@ class SamplingParams:
                                   # does not use, and it was only ever consulted after the
                                   # trajectory. This consults it during
     ar_scale: float = 1.0         # how hard to push along that gradient
+    ar_clamp_weight: float = 0.0  # instead of a gradient, revise the DRAFT: decode x0 to
+                                  # tokens, ask the autoregressive model what it would put
+                                  # at each position given the prefix and the caption, and
+                                  # snap x0 to that. The gradient route failed because a
+                                  # soft mixture of embeddings is off the AR model's
+                                  # manifold; this hands it the discrete strings it was
+                                  # trained on, at the one place a continuous sampler
+                                  # already touches discreteness. 0 disables
+    ar_clamp_strength: float = 1.0  # how far to move x0 toward the revised tokens
+    ar_repaint_rounds: int = 0    # after the trajectory, re-noise ONLY the positions an
+                                  # autoregressive verifier confidently disputes and let
+                                  # the diffusion redo them, with the rest of the molecule
+                                  # held fixed. Forcing the verifier's token was measured
+                                  # to destroy the sample; this forces nothing, it only
+                                  # asks for those positions again. Whole-sample
+                                  # re-noising (refine_rounds) is a fixed point; this is
+                                  # not, because the untouched molecule constrains it
+    ar_repaint_t: float = 0.75    # how far back the disputed positions go
+    ar_repaint_steps: int = 40    # solver steps per repaint round
+    ar_repaint_min_prob: float = 0.9   # how sure the verifier must be to dispute
+    # --- particle filtering over the trajectory -----------------------------------
+    # Three separate measurements say the verifier cannot edit a position: forcing its
+    # token destroys the sample, its gradient moves nothing, and re-noising a disputed
+    # position returns the same token (0 of 294 changed at alpha 0.92). The one thing it
+    # does well is rank finished molecules, which took exact match from 0.052 to 0.121.
+    # So consult it on whole states rather than positions, and let it allocate compute:
+    # carry several particles per caption and periodically clone the ones it likes over
+    # the ones it does not. Nothing is overwritten, so the model's own dynamics are
+    # untouched; only which trajectories survive is changed.
+    smc_group: int = 1            # particles per caption, in consecutive rows
+    smc_alphas: tuple = ()        # resample the first time alpha(t) passes each of these
+    smc_lambda: float = 1.0       # weight on the per-token mean log-likelihood
+    smc_ess: float = 0.5          # skip a resample while the effective sample size is
+                                  # above this fraction of the particle count
+    ar_min_prob: float = 0.0      # revise only where the AR model is at least this
+                                  # confident in its own choice
+    draft_max_prob: float = 1.0   # and only where the diffusion readout is at most
+                                  # this confident in the draft. Together these turn
+                                  # a blanket rewrite into speculative decoding's
+                                  # accept-unless-confidently-rejected rule
     ar_start_alpha: float = 0.5   # leave guidance off while the x0 estimate is still
                                   # uninformative and its token distribution near uniform
     init_tokens: Optional[Any] = None   # (N, T) token ids to start the trajectory from
@@ -212,6 +254,100 @@ def _time_grid(params: SamplingParams) -> torch.Tensor:
 
 
 @torch.no_grad()
+def _smc_on(params) -> bool:
+    return (int(params.smc_group) > 1
+            and params.ar_model is not None
+            and len(params.smc_alphas) > 0)
+
+
+@torch.no_grad()
+def _ar_mean_logp(draft, score_model, ar_model, pad_idx, conditional):
+    """Per-token mean log p(SMILES | caption) of a decoded draft.
+
+    The summed log-likelihood would prefer short strings mechanically, and particles
+    differ in length by construction, so the mean is the comparable quantity -- the same
+    choice the post-hoc selection rule makes.
+    """
+    ar_raw = unwrap_model(ar_model)
+    logits = ar_raw(draft[:, :-1],
+                    text=(score_model.text if conditional else None),
+                    text_mask=(score_model.text_mask if conditional else None))
+    logp = torch.log_softmax(logits.float(), dim=-1)
+    tgt = draft[:, 1:]
+    picked = logp.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
+    real = (tgt != pad_idx).float()
+    return (picked * real).sum(-1) / real.sum(-1).clamp(min=1)
+
+
+def _smc_simulate(simulator, x0, ts, grid, path, on_step, score_model, raw, get_logits,
+                  pad_idx, params, device, mask_box, conditional, needs_length):
+    """Integrate the reverse SDE while periodically reallocating particles.
+
+    Rows arrive grouped by caption, `smc_group` of them in a row. At each checkpoint the
+    current x0 estimate of every particle is decoded and scored by the verifier, and the
+    group is resampled from the resulting weights. A particle that is cloned diverges from
+    its parent on the next step because the reverse process is stochastic, which is what
+    makes the reallocation worth anything; under a deterministic solver clones would stay
+    identical and this reduces to selection at the end.
+    """
+    group = int(params.smc_group)
+    b = x0.shape[0]
+    if b % group:
+        raise ValueError(
+            f"generate.smc_group is {group} but the batch holds {b} rows; the batch size "
+            "has to be a multiple of the particle count so no group straddles a batch")
+    ncap = b // group
+    emb_width = raw.token_embedding.weight.shape[-1]
+
+    alphas = path.alpha(grid.view(-1, 1, 1)).flatten()
+    cuts = []
+    for target in sorted(float(a) for a in params.smc_alphas):
+        hit = (alphas >= target).nonzero()
+        if hit.numel() == 0:
+            continue
+        idx = int(hit[0])
+        if 1 <= idx < grid.numel() - 1 and idx not in cuts:
+            cuts.append(idx)
+    bounds = [0] + cuts + [grid.numel() - 1]
+
+    xts = x0
+    for seg, (lo, hi) in enumerate(zip(bounds[:-1], bounds[1:])):
+        xts = simulator.simulate(xts, ts[:, lo : hi + 1], use_bar=False, on_step=on_step)
+        if seg == len(bounds) - 2:
+            break  # the last segment ends the trajectory; selection happens downstream
+
+        draft = get_logits(xts[..., :emb_width]).argmax(-1)
+        score = _ar_mean_logp(draft, score_model, params.ar_model, pad_idx, conditional)
+        w = torch.softmax(float(params.smc_lambda) * score.view(ncap, group), dim=-1)
+        ess = 1.0 / w.pow(2).sum(-1)                       # (ncap,)
+        live = ess < float(params.smc_ess) * group
+        if not bool(live.any()):
+            continue
+        idx = torch.multinomial(w, group, replacement=True)
+        base = torch.arange(group, device=device).view(1, -1).expand(ncap, -1)
+        idx = torch.where(live.view(-1, 1), idx, base)     # groups still diverse are left
+        order = (idx + torch.arange(ncap, device=device).view(-1, 1) * group).reshape(-1)
+
+        xts = xts[order]
+        if mask_box is not None:
+            mask_box[0] = mask_box[0][order]
+        if needs_length and getattr(score_model, "length", None) is not None:
+            score_model.length = score_model.length[order]
+        if conditional:
+            score_model.text = score_model.text[order]
+            score_model.text_mask = score_model.text_mask[order]
+        carry = getattr(score_model, "_x0_self", None)
+        if carry is not None:
+            # the self-conditioning carry belongs to the particle, not to the row
+            score_model._x0_self = carry[order]
+        if os.environ.get("DIMOL_SMC_DEBUG"):
+            kept = int((idx != base).sum())
+            print(f"[smc] alpha {float(alphas[hi]):.2f}: resampled {int(live.sum())}"
+                  f"/{ncap} groups, {kept}/{b} particles replaced, "
+                  f"mean ESS {float(ess.mean()):.2f}/{group}", flush=True)
+    return xts
+
+
 def sample_smiles(
     model: torch.nn.Module,
     path: Any,
@@ -259,7 +395,16 @@ def sample_smiles(
         )
     else:
         score_model = DenoiserModel(model, path, regime=params.regime)
-    if params.ar_model is not None:
+    if params.ar_model is not None and params.ar_clamp_weight != 0.0:
+        from dimol.models.denoiser import ARClampedDenoiserModel
+
+        score_model = ARClampedDenoiserModel(
+            model, path, params.ar_model, regime=params.regime,
+            weight=params.ar_clamp_weight, strength=params.ar_clamp_strength,
+            from_alpha=params.ar_start_alpha,
+            ar_min_prob=params.ar_min_prob, draft_max_prob=params.draft_max_prob,
+            pad_idx=int(getattr(raw.config, "pad_idx", 0)))
+    elif params.ar_model is not None:
         from dimol.models.denoiser import ARGuidedDenoiserModel
 
         score_model = ARGuidedDenoiserModel(
@@ -347,6 +492,7 @@ def sample_smiles(
         )
         on_step = None
         drawn_lengths = None
+        mask_box = None
         if pad_embedding is not None:
             generator = torch.Generator(device="cpu").manual_seed(params.seed + done)
             if params.length_exact:
@@ -380,11 +526,13 @@ def sample_smiles(
                 else:
                     pad_target = pad_embedding.view(1, 1, -1)
 
-                def on_step(state, t_next, _mask=known_mask, _pad=pad_target):
+                mask_box = [known_mask]
+
+                def on_step(state, t_next, _box=mask_box, _pad=pad_target):
                     alpha, beta = path.alpha(t_next), path.beta(t_next)
                     noise = torch.randn_like(state)
                     conditional = alpha * _pad + beta * noise
-                    return torch.where(_mask, conditional, state)
+                    return torch.where(_box[0], conditional, state)
 
                 x0 = on_step(x0, ts[:, 0])
 
@@ -395,7 +543,12 @@ def sample_smiles(
         if text_all is not None:
             score_model.text = text_all[done : done + b].to(device).float()
             score_model.text_mask = mask_all[done : done + b].to(device)
-        xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
+        if _smc_on(params):
+            xts = _smc_simulate(
+                simulator, x0, ts, grid, path, on_step, score_model, raw, get_logits,
+                pad_idx, params, device, mask_box, text_all is not None, needs_length)
+        else:
+            xts = simulator.simulate(x0, ts, use_bar=params.progress, on_step=on_step)
 
         for _ in range(max(int(params.refine_rounds), 0)):
             # re-noise the finished sample to refine_t and denoise it again, so every
@@ -414,6 +567,69 @@ def sample_smiles(
             if hasattr(score_model, "reset"):
                 score_model.reset()
             xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
+
+        # --- autoregressive repaint ---------------------------------------------
+        for _ in range(max(int(params.ar_repaint_rounds), 0)):
+            if params.ar_model is None:
+                break
+            emb_width = raw.token_embedding.weight.shape[-1]
+            draft = get_logits(xts[..., :emb_width]).argmax(-1)
+            ar_raw = unwrap_model(params.ar_model)
+            with torch.no_grad():
+                ar_logits = ar_raw(
+                    draft[:, :-1],
+                    text=(score_model.text if text_all is not None else None),
+                    text_mask=(score_model.text_mask if text_all is not None else None))
+                ar_prob, ar_choice = ar_logits.float().softmax(-1).max(-1)
+
+            disputed = torch.zeros_like(draft, dtype=torch.bool)
+            disputed[:, 1:] = (ar_choice != draft[:, 1:]) & (ar_prob >= params.ar_repaint_min_prob)
+            ar_choice_full = torch.zeros_like(draft)
+            ar_choice_full[:, 1:] = ar_choice
+            # Padding is not the verifier's to dispute: the length is supplied separately.
+            disputed &= draft != pad_idx
+            n_disp = int(disputed.sum())
+            n_tok = int((draft != pad_idx).sum())
+            n_mol = int(disputed.any(dim=-1).sum())
+            if os.environ.get("DIMOL_REPAINT_DEBUG"):
+                print(f"[repaint] t={params.ar_repaint_t} minp={params.ar_repaint_min_prob} "
+                      f"disputed {n_disp}/{n_tok} tokens in {n_mol}/{draft.shape[0]} molecules",
+                      flush=True)
+            if not bool(disputed.any()):
+                break
+
+            keep = (~disputed).unsqueeze(-1)
+            anchor = xts.detach()
+            t_back = torch.full((b, 1, 1), float(params.ar_repaint_t), device=device)
+            alpha_b, beta_b = path.alpha(t_back), path.beta(t_back)
+            xts = torch.where(keep, xts, alpha_b * xts + beta_b * torch.randn_like(xts))
+
+            def repaint_step(state, t_next, _keep=keep, _anchor=anchor, _prev=on_step):
+                # RePaint: the kept positions are re-imposed at the current noise level at
+                # every step, so the disputed ones are redone in their presence rather
+                # than in a vacuum.
+                alpha_s, beta_s = path.alpha(t_next), path.beta(t_next)
+                noise = torch.randn_like(state)
+                state = torch.where(_keep, alpha_s * _anchor + beta_s * noise, state)
+                return _prev(state, t_next) if _prev is not None else state
+
+            short = (
+                torch.linspace(float(params.ar_repaint_t), params.t_end,
+                               int(params.ar_repaint_steps))
+                .view(1, -1, 1, 1).expand(b, -1, -1, -1).to(device)
+            )
+            if hasattr(score_model, "reset"):
+                score_model.reset()
+            xts = simulator.simulate(xts, short, use_bar=False, on_step=repaint_step)
+
+            if os.environ.get("DIMOL_REPAINT_DEBUG"):
+                after = get_logits(xts[..., :emb_width]).argmax(-1)
+                moved = int(((after != draft) & disputed).sum())
+                spill = int(((after != draft) & ~disputed).sum())
+                agreed = int(((after == ar_choice_full) & disputed).sum())
+                print(f"[repaint] of {n_disp} disputed, {moved} changed, "
+                      f"{agreed} now match the verifier; {spill} undisputed moved",
+                      flush=True)
 
         content_end = None
         full_latent = xts

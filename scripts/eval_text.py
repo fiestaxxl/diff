@@ -147,38 +147,97 @@ def stage_generate(args) -> None:
         print(f"  length head: MAE {np.abs(predicted_lengths - true_lengths).mean():.2f} "
               f"tokens on these captions")
 
+    particles = max(int(args.smc_particles), 1)
+    smc_alphas = tuple(float(a) for a in args.smc_alphas.split(",") if a.strip()) \
+        if args.smc_alphas else ()
+    length_matrix = None
+    if particles > 1:
+        if args.length_matrix is not None:
+            # One length per particle, so the particles span the length candidates and
+            # the filter chooses among plans rather than among noise draws alone.
+            length_matrix = np.load(args.length_matrix)[:n]
+            if length_matrix.shape[1] < particles:
+                raise ValueError(
+                    f"{args.length_matrix} holds {length_matrix.shape[1]} candidate "
+                    f"lengths but {particles} particles were asked for")
+            length_matrix = length_matrix[:, :particles].astype(np.int64)
+        print(f"  {particles} particles per caption"
+              + (f", resampling at alpha {smc_alphas}" if smc_alphas
+                 else ", selected only at the end")
+              + (" , lengths from the candidate matrix" if length_matrix is not None
+                 else ""))
+
     caption_index = np.arange(n)
     if args.shuffle_captions:
         caption_index = np.roll(caption_index, n // 2)
         print("  captions shuffled: every molecule is paired with another one's caption")
 
     for scale in args.guidance:
+        text_rows = np.asarray(text[:n], dtype=np.float32)[caption_index]
+        mask_rows = np.asarray(text_mask[:n]).astype(bool)[caption_index]
+        length_rows = (predicted_lengths if predicted_lengths is not None
+                       else np.asarray(masks[:n]).sum(1))
+        batch_size = args.batch_size
+        if particles > 1:
+            text_rows = np.repeat(text_rows, particles, axis=0)
+            mask_rows = np.repeat(mask_rows, particles, axis=0)
+            length_rows = (length_matrix.reshape(-1) if length_matrix is not None
+                           else np.repeat(np.asarray(length_rows), particles))
+            batch_size = max(particles, (batch_size // particles) * particles)
+
         params = SamplingParams(
-            num_samples=n, batch_size=args.batch_size, num_timesteps=args.steps,
+            num_samples=n * particles, batch_size=batch_size,
+            num_timesteps=args.steps,
             decode="grammar_close", strict=True, seed=args.seed, solver=args.solver,
             content_rule=args.content_rule,
             ar_model=ar_guide, ar_scale=args.ar_scale,
+            ar_clamp_weight=args.ar_clamp,
+            ar_clamp_strength=args.ar_clamp_strength,
+            ar_repaint_rounds=args.ar_repaint,
+            ar_repaint_t=args.ar_repaint_t,
+            ar_repaint_steps=args.ar_repaint_steps,
+            ar_repaint_min_prob=args.ar_repaint_min_prob,
+            ar_min_prob=args.ar_min_prob,
+            draft_max_prob=args.draft_max_prob,
             ar_start_alpha=args.ar_start_alpha,
             init_tokens=(np.load(args.init_tokens)[:n]
                          if args.init_tokens is not None else None),
             init_t=args.init_t,
-            text=np.asarray(text[:n], dtype=np.float32)[caption_index],
-            text_mask=np.asarray(text_mask[:n]).astype(bool)[caption_index],
+            text=text_rows,
+            text_mask=mask_rows,
             guidance=float(scale),
-            length_prior=(predicted_lengths if predicted_lengths is not None
-                          else np.asarray(masks[:n]).sum(1)),
-            length_exact=bool(args.oracle_length) or predicted_lengths is not None,
+            length_prior=length_rows,
+            length_exact=(bool(args.oracle_length)
+                          or predicted_lengths is not None
+                          or length_matrix is not None),
+            smc_group=particles, smc_alphas=smc_alphas,
+            smc_lambda=args.smc_lambda, smc_ess=args.smc_ess,
         )
         generated = sample_smiles(model, path, tokenizer, params, device)
         name = (f"guidance_{scale}"
                 + ("_heun" if args.solver == "heun" else "")
                 + ("_shuffled" if args.shuffle_captions else "")
                 + ("_oraclelen" if args.oracle_length else "")
-                + (f"_arg{args.ar_scale}" if args.ar_guide is not None else "")
+                + (f"_rp{args.ar_repaint}" if args.ar_repaint else "")
+                + (f"_arc{args.ar_clamp}" if args.ar_clamp else "")
+                + (f"_arg{args.ar_scale}"
+                   if args.ar_guide is not None and not args.ar_clamp else "")
                 + (f"_init{args.init_t}" if args.init_tokens is not None else "")
                 + ("_filelen" if args.length_file is not None else "")
                 + ("_headlen" if args.length_head is not None
-                   and args.length_file is None else ""))
+                   and args.length_file is None else "")
+                + (f"_smc{particles}" if particles > 1 else ""))
+        if particles > 1:
+            # One directory per particle slot, each a drop-in for the candidate pipeline:
+            # validity needs a chemistry toolkit, so the choice among survivors is made
+            # downstream rather than here.
+            for j in range(particles):
+                sub = args.out / f"p{j}"
+                sub.mkdir(parents=True, exist_ok=True)
+                (sub / "reference.txt").write_text("\n".join(references) + "\n")
+                (sub / f"{name}.txt").write_text(
+                    "\n".join(generated[j::particles]) + "\n")
+            generated = generated[0::particles]
         (args.out / f"{name}.txt").write_text("\n".join(generated) + "\n")
         ok = sum(grammatical(s) for s in generated)
         f1 = float(np.mean([token_f1(g, r, tokenizer)
@@ -256,6 +315,41 @@ def main() -> None:
                              "from 0.052 to 0.121; this consults it during the trajectory "
                              "instead of after it")
     parser.add_argument("--ar-scale", type=float, default=1.0)
+    parser.add_argument("--ar-clamp", type=float, default=0.0,
+                        help="weight, in logit units, on the autoregressive model's "
+                             "opinion when the x0 estimate is snapped to tokens at each "
+                             "step. 1.0 weighs it equally with the diffusion readout. "
+                             "This revises a DISCRETE draft, which is what the AR model "
+                             "was trained on, unlike the gradient route")
+    parser.add_argument("--ar-clamp-strength", type=float, default=1.0)
+    parser.add_argument("--ar-repaint", type=int, default=0,
+                        help="rounds of selective repaint: re-noise only the positions "
+                             "the autoregressive verifier confidently disputes and let "
+                             "the diffusion redo them, holding the rest of the molecule "
+                             "fixed. Forcing the verifier's token destroys the sample; "
+                             "this forces nothing")
+    parser.add_argument("--ar-repaint-t", type=float, default=0.75)
+    parser.add_argument("--ar-repaint-steps", type=int, default=40)
+    parser.add_argument("--ar-repaint-min-prob", type=float, default=0.9)
+    parser.add_argument("--ar-min-prob", type=float, default=0.0,
+                        help="revise only where the AR model is this confident")
+    parser.add_argument("--draft-max-prob", type=float, default=1.0,
+                        help="and only where the diffusion readout is not")
+    parser.add_argument("--smc-particles", type=int, default=1,
+                        help="carry this many trajectories per caption and let the "
+                             "verifier reallocate compute among them during the solve. "
+                             "The verifier cannot edit a position -- forcing destroys "
+                             "the sample, its gradient moves nothing, and re-noising a "
+                             "disputed position returns the same token -- but it ranks "
+                             "whole molecules well, so it is consulted on whole states")
+    parser.add_argument("--smc-alphas", default="",
+                        help="comma separated alpha values at which to resample; empty "
+                             "keeps the particles independent, which is selection at the "
+                             "end and the control this has to beat")
+    parser.add_argument("--smc-lambda", type=float, default=1.0)
+    parser.add_argument("--smc-ess", type=float, default=0.5)
+    parser.add_argument("--length-matrix", type=Path, default=None,
+                        help="n x k array of candidate lengths, one column per particle")
     parser.add_argument("--ar-start-alpha", type=float, default=0.5,
                         help="leave guidance off until the x0 estimate carries signal")
     parser.add_argument("--init-tokens", type=Path, default=None,
