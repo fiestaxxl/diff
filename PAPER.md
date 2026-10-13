@@ -266,7 +266,16 @@ in the manner of RePaint. The verifier disputes 294 of 2210 real tokens (13.3%) 
 
 Given the rest of the molecule, the model re-derives exactly the token it produced, from
 noise levels that destroy most of the signal. Zero, one and two repaint rounds, with and
-without gradient guidance, write byte-identical files. The disagreement between the two
+without gradient guidance, write byte-identical files.
+
+This measurement has a trap in it that we report because it nearly produced the opposite
+conclusion. At 1,000 captions the same comparison showed one round changing 495 molecules
+and two rounds another 479. All the differences begin at line 251, and the batch size is
+250: the repaint draws noise, the sampler batches, and the global random stream is shared,
+so every batch after the first was sampled from noise the intervention had displaced —
+after those batches' own trajectories had finished. Half the test set changed for a reason
+unrelated to the verifier. An intervention that consumes randomness is not controlled
+against one that does not. The disagreement between the two
 models is therefore not the diffusion being uncertain where the verifier is confident; the
 two hold stable, incompatible opinions. A position can only be overwritten, and overwriting
 is measured to destroy the molecule.

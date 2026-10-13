@@ -494,11 +494,83 @@ is left is to choose among whole states, which is the one thing the verifier is 
 do well — and selection at the end already works. The open question is whether selection
 *during* the trajectory beats selection at the end, which is what the particle filter asks.
 
-Caveat on the record: the first repaint sweep (1000 captions, four settings on four cards)
-reported one run differing from its three siblings on 479 of 1000 molecules, with a mean
-length difference of 8 characters — entirely different molecules, not numerical drift. The
-controlled six-way comparison says that cannot happen. That sweep is therefore not trusted
-and is being rerun sequentially on one card; **no number from it is used here.**
+### Particle filtering: the fourth route, and why it fails
+
+If the verifier can only judge whole states, the natural place to use it during sampling is
+on whole trajectories. Carry several particles per caption, decode each one's current x0
+estimate at a few checkpoints, score it, and clone the ones the verifier likes over the ones
+it does not. Nothing is overwritten, so the model's dynamics are untouched; only which
+trajectories survive changes. Cloned particles diverge on the next step because the reverse
+process is stochastic.
+
+Five particles per caption, one per top-5 predicted length, 1000 captions, selected
+afterwards by the same validity-then-likelihood rule as every candidate row:
+
+| resampling | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity | no usable candidate |
+|---|---|---|---|---|---|---|---|---|---|
+| **none (control)** | **0.777** | **0.138** | **18.15** | **0.780** | **0.640** | **0.557** | **1.50** | **0.970** | 30 (3.0%) |
+| α 0.5/0.7/0.85, λ=5 | 0.735 | 0.039 | 20.98 | 0.741 | 0.566 | 0.481 | 1.82 | 0.800 | 200 (20.0%) |
+| α 0.5/0.7/0.85, λ=20 | 0.733 | 0.031 | 21.17 | 0.738 | 0.561 | 0.476 | 1.83 | 0.787 | 213 (21.3%) |
+| α 0.3…0.95, λ=20 | 0.733 | 0.034 | 21.19 | 0.744 | 0.564 | 0.484 | 1.72 | 0.784 | 216 (21.6%) |
+
+Resampling costs more than a third of exact match. The mechanism is in the last column.
+**The mean number of usable candidates is unchanged — 3.91 of 5 with resampling, 3.91
+without — but the number of captions with none at all goes from 30 to 216.** Cloning makes
+the particles correlated: the pool is now all-valid or all-invalid instead of mixed, and it
+is the independence of the candidates, not their average quality, that the selection rule
+lives on. The filter also commits early, at α = 0.5, where the decoded draft is still half
+noise; the effective sample size collapses to 1.1–1.9 of 5 at the first checkpoint.
+
+### What the control says instead
+
+The no-resampling row is the best configuration measured in this project, and it is not the
+filter — it is five *independent* candidates. Against the five-candidate row, which differs
+only in that all five shared one noise draw and varied only in length:
+
+| 1000 captions, pool of 5 | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| one candidate, no selection | 0.734 | 0.059 | 21.09 | 0.764 | 0.592 | 0.514 | 1.72 | 0.771 |
+| 5 lengths, shared noise | 0.776 | 0.131 | 18.70 | 0.777 | 0.634 | 0.551 | 1.64 | 0.949 |
+| **5 lengths, own noise each** | **0.777** | **0.138** | **18.15** | **0.780** | **0.640** | **0.557** | **1.50** | **0.970** |
+| 10 lengths, shared noise | 0.784 | 0.147 | 17.91 | 0.782 | 0.645 | 0.560 | 1.67 | 0.991 |
+
+Giving each candidate its own noise draw as well as its own length is free — identical
+compute — and worth 0.007 exact match, 0.021 validity and 0.14 FCD. So the two kinds of
+diversity add rather than substitute, which is what the ten-particle run now measures.
+
+### The artefact that nearly became a result
+
+The first repaint sweep, at 1000 captions, said something else: one round changed 495 of
+1000 molecules and two rounds changed another 479, with a mean length difference of 8
+characters — whole different molecules, not numerical drift. That cannot be squared with
+294 disputed tokens all staying put. Rerunning the three sequentially on one card
+reproduced the sweep exactly, so it was not a flake.
+
+The differing lines are what gave it away. **The first 250 are byte-identical and every
+difference starts at line 251**, spread evenly from there (158, 174 and 163 per 250). The
+batch size is 250.
+
+The repaint draws noise, the sampler runs in batches, and the global random stream is
+shared: the first batch sees the trajectory it would have seen anyway, and **every later
+batch gets different noise because of draws the intervention made after that batch's
+trajectory was already finished.** Half the test set changed for a reason that has nothing
+to do with the verifier, and the metrics moved by about what reshuffling noise moves them:
+
+| | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| 0 rounds | 0.734 | 0.059 | 20.75 | 0.759 | 0.586 | 0.508 | 1.64 | 0.788 |
+| 1 round | 0.734 | 0.053 | 20.91 | 0.761 | 0.585 | 0.505 | 1.74 | 0.778 |
+| 2 rounds | 0.736 | 0.060 | 20.73 | 0.760 | 0.594 | 0.516 | 1.69 | 0.791 |
+
+The sampler now saves and restores the stream around any post-trajectory intervention, and
+the particle filter's resampling draw comes from its own generator, so a batch's samples can
+no longer depend on what was done to the batch before it. The 64-caption measurement — one
+batch, nothing downstream to contaminate — was clean all along and is the one that stands.
+A regression test pins the guard.
+
+**The general lesson, written here because it has now cost two experiments:** an
+intervention that consumes randomness is not controlled against one that does not, however
+carefully everything else is matched.
 
 ## Retracted claims
 

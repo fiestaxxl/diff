@@ -9,6 +9,8 @@ piece of per-row state travels with its particle.
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -219,3 +221,39 @@ def test_a_weighted_mask_leaves_the_certain_ends_exactly_where_a_hard_one_would(
     middle = soft[:, 6:9]
     assert not torch.allclose(middle, state[:, 6:9])
     assert not torch.allclose(middle, conditional.expand_as(state)[:, 6:9])
+
+
+def test_a_post_trajectory_intervention_does_not_move_the_random_stream():
+    """The sampler runs in batches off one global stream. A repaint round that draws noise
+    shifts every LATER batch, which is indistinguishable from the intervention working:
+    measured, that artefact was 495 of 1000 molecules, with the first batch byte-identical
+    and every batch after it different. So the stream is restored on the way out.
+    """
+    import dimol.eval.sampling as sampling
+
+    src = pathlib.Path(sampling.__file__).read_text()
+    block = src.split("# --- autoregressive repaint")[1]
+    assert "get_rng_state" in block.split("content_end = None")[0]
+    assert "set_rng_state" in block.split("content_end = None")[0]
+
+    # and the behaviour the guard is there to protect
+    torch.manual_seed(7)
+    before = torch.randn(4)
+    torch.manual_seed(7)
+    state = torch.random.get_rng_state()
+    _ = torch.randn(99)                      # an intervention's own draws
+    torch.random.set_rng_state(state)
+    assert torch.equal(torch.randn(4), before)
+
+
+def test_resampling_draws_from_its_own_stream():
+    """Same hazard inside the filter: if the multinomial draw came off the global stream,
+    two settings would differ in what they resampled and in what they sampled."""
+    raw, path, score_model, params, grid, ts, x0, b = _setup()
+    torch.manual_seed(11)
+    marker = torch.randn(3)
+    torch.manual_seed(11)
+    _smc_simulate(_Simulator(), x0, ts, grid, path, None, score_model, raw, raw.out_proj,
+                  PAD, params, "cpu", None, True, False)
+    after = torch.randn(3)
+    assert torch.equal(after, marker), "the resampling draw moved the global stream"

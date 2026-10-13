@@ -309,6 +309,9 @@ def _smc_simulate(simulator, x0, ts, grid, path, on_step, score_model, raw, get_
             "has to be a multiple of the particle count so no group straddles a batch")
     ncap = b // group
     emb_width = raw.token_embedding.weight.shape[-1]
+    # Its own stream: the resampling draw must not change the noise that later batches
+    # see, or two settings differ in what they resampled AND in what they sampled.
+    rng = torch.Generator(device=device).manual_seed(int(params.seed) + 9973)
 
     alphas = path.alpha(grid.view(-1, 1, 1)).flatten()
     cuts = []
@@ -334,7 +337,7 @@ def _smc_simulate(simulator, x0, ts, grid, path, on_step, score_model, raw, get_
         live = ess < float(params.smc_ess) * group
         if not bool(live.any()):
             continue
-        idx = torch.multinomial(w, group, replacement=True)
+        idx = torch.multinomial(w, group, replacement=True, generator=rng)
         base = torch.arange(group, device=device).view(1, -1).expand(ncap, -1)
         idx = torch.where(live.view(-1, 1), idx, base)     # groups still diverse are left
         order = (idx + torch.arange(ncap, device=device).view(-1, 1) * group).reshape(-1)
@@ -595,6 +598,15 @@ def sample_smiles(
             xts = simulator.simulate(xts, short, use_bar=False, on_step=on_step)
 
         # --- autoregressive repaint ---------------------------------------------
+        # Anything drawn here comes after the trajectory, but the sampler runs in batches
+        # and the global stream is shared: one extra draw and every LATER batch gets
+        # different noise, which looks exactly like an effect. Measured, that artefact was
+        # 495 of 1000 molecules -- the first batch byte-identical, every batch after it
+        # different. The stream is therefore restored on the way out, so a post-trajectory
+        # intervention can only be judged on what it does to this batch.
+        _on_cuda = torch.device(device).type == "cuda"
+        _rng_state = (torch.cuda.get_rng_state(device) if _on_cuda
+                      else torch.random.get_rng_state())
         for _ in range(max(int(params.ar_repaint_rounds), 0)):
             if params.ar_model is None:
                 break
@@ -656,6 +668,12 @@ def sample_smiles(
                 print(f"[repaint] of {n_disp} disputed, {moved} changed, "
                       f"{agreed} now match the verifier; {spill} undisputed moved",
                       flush=True)
+
+        if int(params.ar_repaint_rounds) > 0:
+            if _on_cuda:
+                torch.cuda.set_rng_state(_rng_state, device)
+            else:
+                torch.random.set_rng_state(_rng_state)
 
         content_end = None
         full_latent = xts
