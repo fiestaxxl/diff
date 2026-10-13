@@ -15,8 +15,10 @@ from torch.utils.data._utils.collate import default_collate
 # Anything conditioning the model on something other than the canvas has its own time
 # axis and must never be trimmed by the molecule's length. Caption tensors are the case
 # that exists today, and with a 128-token canvas and 128-token captions the two lengths
-# coincide, so this cannot be inferred from shapes.
-NOT_ON_THE_CANVAS = ("text", "text_mask")
+# coincide, so this cannot be inferred from shapes. The caption ids are listed for the
+# same reason as the states: with bucket_by_length on, BERT would be handed a caption cut
+# to the longest molecule in the batch, and nothing in the loss or the metrics would say so.
+NOT_ON_THE_CANVAS = ("text", "text_mask", "caption_ids", "caption_attn")
 
 
 def trim_collate(

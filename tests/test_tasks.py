@@ -1,6 +1,7 @@
 """Losses: output shape, a stable metric key set, finite values."""
 from __future__ import annotations
 
+import pytest
 import torch
 
 from dimol.diffusion.conditionals import CosineAlpha, CosineBeta
@@ -233,3 +234,127 @@ def test_the_loss_runs_under_the_deterministic_gate():
     model, batch = _tiny_denoiser(), _batch(batch_size=8)
     out = _diffusion_task(gate_mode="topk", gate_fraction=0.5).compute_loss(model, batch)
     assert torch.isfinite(out["loss"]) and torch.isfinite(out["ce_loss"])
+
+
+# ---------------------------------------- the caption encoder branch of the same loss
+
+TEXT_DIM, TEXT_LEN, CAPTION_VOCAB = 32, 7, 48
+
+
+def _tiny_encoder(path):
+    from transformers import BertConfig, BertModel
+
+    BertModel(BertConfig(
+        vocab_size=CAPTION_VOCAB, hidden_size=TEXT_DIM, num_hidden_layers=2,
+        num_attention_heads=4, intermediate_size=2 * TEXT_DIM,
+        max_position_embeddings=4 * TEXT_LEN), add_pooling_layer=False).save_pretrained(path)
+    return path
+
+
+def _text_config(**overrides) -> TransformerConfig:
+    params = dict(model_dim=32, emb_dim=8, time_dim=32, num_heads=4, num_text_blocks=1,
+                  vocab_size=VOCAB, pad_idx=0, max_pos=SEQ_LEN + 4, text_dim=TEXT_DIM)
+    params.update(overrides)
+    return TransformerConfig(**params)
+
+
+def _encoder_denoiser(tmp_path) -> DiffusionTransformer:
+    pytest.importorskip("transformers")
+    return DiffusionTransformer(
+        _text_config(text_encoder=str(_tiny_encoder(tmp_path / "enc"))))
+
+
+def _caption_batch(batch_size: int = 4) -> dict:
+    batch = _batch(batch_size)
+    attn = torch.zeros(batch_size, TEXT_LEN, dtype=torch.bool)
+    attn[:, :5] = True
+    batch["caption_ids"] = torch.randint(1, CAPTION_VOCAB, (batch_size, TEXT_LEN)) * attn
+    batch["caption_attn"] = attn
+    return batch
+
+
+def _cached_batch(batch_size: int = 4) -> dict:
+    batch = _batch(batch_size)
+    mask = torch.zeros(batch_size, TEXT_LEN, dtype=torch.bool)
+    mask[:, :5] = True
+    batch["text"] = torch.randn(batch_size, TEXT_LEN, TEXT_DIM)
+    batch["text_mask"] = mask
+    return batch
+
+
+def _capture(model) -> dict:
+    """Record the keyword arguments the loss hands the model."""
+    seen, original = {}, model.forward
+    model.forward = lambda **kwargs: (seen.update(kwargs), original(**kwargs))[1]
+    return seen
+
+
+def test_caption_dropout_blanks_rows_of_the_cross_attention_mask_only(tmp_path):
+    """An all-False row into BERT is a softmax over nothing, so the dropout cannot land on
+    caption_attn; what must stop seeing the caption is the cross-attention above it."""
+    torch.manual_seed(0)
+    model = _encoder_denoiser(tmp_path)
+    model.train()
+    batch = _caption_batch(batch_size=64)
+    seen = _capture(model)
+    torch.manual_seed(3)
+    _diffusion_task(caption_dropout=0.5).compute_loss(model, batch)
+
+    text_mask, caption_attn = seen["text_mask"], seen["caption_attn"]
+    dropped = ~text_mask.any(1)
+    assert 0 < int(dropped.sum()) < 64, "the dropout fired on every row or on none"
+    assert torch.equal(caption_attn, batch["caption_attn"])
+    assert bool(caption_attn.any(1).all())
+    assert torch.equal(text_mask[~dropped], caption_attn[~dropped])
+
+
+def test_the_caption_branch_draws_the_same_randomness_as_the_cached_one(tmp_path):
+    """Same shape, same place in the sequence: this is what makes the window arm a
+    controlled comparison against the cached-states run rather than a second change."""
+    torch.manual_seed(0)
+    live = _encoder_denoiser(tmp_path)
+    cached = DiffusionTransformer(_text_config())
+    live.train()
+    cached.train()
+    seen_live, seen_cached = _capture(live), _capture(cached)
+    task = _diffusion_task(caption_dropout=0.3)
+    # built before the seed: making a batch draws, and the comparison is about what the
+    # loss draws, not about what the fixtures do
+    caption_batch, cached_batch = _caption_batch(batch_size=32), _cached_batch(batch_size=32)
+
+    torch.manual_seed(11)
+    task.compute_loss(live, caption_batch)
+    torch.manual_seed(11)
+    task.compute_loss(cached, cached_batch)
+    assert torch.equal(~seen_live["text_mask"].any(1), ~seen_cached["text_mask"].any(1))
+
+
+def test_an_encoder_model_fed_cached_states_is_refused(tmp_path):
+    """A silent fallback here leaves the encoder without a gradient, and a parameter with
+    no gradient hangs DDP at find_unused_parameters=false on the next all-reduce."""
+    model = _encoder_denoiser(tmp_path)
+    with pytest.raises(ValueError, match="no 'caption_ids'"):
+        _diffusion_task().compute_loss(model, _cached_batch())
+
+
+def test_caption_ids_against_a_model_with_no_encoder_are_refused():
+    pytest.importorskip("transformers")
+    model = DiffusionTransformer(_text_config())
+    with pytest.raises(ValueError, match="no caption encoder"):
+        _diffusion_task().compute_loss(model, _caption_batch())
+
+
+def test_the_loss_runs_and_trains_the_encoder(tmp_path):
+    pytest.importorskip("transformers")
+    torch.manual_seed(0)
+    # the window arm's shape: the top block takes gradients and nothing below it does
+    model = DiffusionTransformer(_text_config(
+        text_encoder=str(_tiny_encoder(tmp_path / "enc")),
+        text_encoder_trainable_blocks=1))
+    out = _diffusion_task().compute_loss(model, _caption_batch())
+    assert torch.isfinite(out["loss"])
+    out["loss"].backward()
+    top = model.text_encoder.encoder.layer[-1]
+    assert any(p.grad is not None and torch.isfinite(p.grad).all()
+               for p in top.parameters())
+    assert all(p.grad is None for p in model.text_encoder.embeddings.parameters())

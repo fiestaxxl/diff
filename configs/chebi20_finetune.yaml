@@ -53,10 +53,17 @@ variables:
                                # the SHARED ZINC-20 + ChEBI tokenizer, 635 tokens, which is
                                # what tokenized this corpus. Pointing this at the 391-token
                                # ZINC-250k tokenizer -- which it did -- silently mis-decodes
-                               # 196 of 3,202 test references (6.1%): 75 become unparseable
-                               # and 121 become a DIFFERENT molecule, because salts,
-                               # hydrates, charged nitrogen and metals all live above id
-                               # 386. It also truncates the decoder's logits to 386, so no
+                               # 196 of 3,202 test references (6.1%): 95 to unparseable
+                               # strings and the rest to a DIFFERENT molecule, because salts,
+                               # hydrates, charged nitrogen and metals all live above id 386.
+                               # Only the 95 is measured. Every pre-fix full-split run records
+                               # unparseable_reference = 95 and every post-fix run records 0;
+                               # how the remainder splits is not recorded anywhere. This
+                               # comment used to read "75 become unparseable and 121 become a
+                               # different molecule", and 75 is not a number the scorer has
+                               # ever produced, so it is withdrawn. See EXPERIMENTS.md,
+                               # "What ChEBI-20 actually measures".
+                               # It also truncates the decoder's logits to 386, so no
                                # generated string could ever contain a disconnection dot.
   vocab_size: 640              # the shared ZINC-20 + ChEBI tokenizer has 630 tokens,
                                # the extra rows simply never get used

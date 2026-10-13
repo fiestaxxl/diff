@@ -69,6 +69,46 @@ def token_f1(generated: str, reference: str, tokenizer) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
+def encode_split_captions(encoder, data_dir: Path, split: str, limit: int, device,
+                          batch: int = 64):
+    """Caption states from the checkpoint's own encoder, in place of the stored ones.
+
+    A checkpoint that trained its encoder has moved away from the ``<split>_text.npy`` in
+    the corpus, and scoring it against those states measures a model conditioned on a
+    caption encoding it no longer produces. Nothing in any metric would say so: the run
+    completes, the numbers are plausible, and they are of a model that does not exist.
+    Hence auto-detection rather than a flag — the failure is silent, so it cannot be left
+    to anyone remembering to pass something.
+
+    float16 because that is the dtype the stored states have, so the two arms reach the
+    sampler through identical numerics and the comparison is of encoders, not of
+    precisions.
+    """
+    import torch
+
+    ids_path = data_dir / f"{split}_caption_ids.npy"
+    if not ids_path.exists():
+        raise FileNotFoundError(
+            f"{ids_path} is missing, and this checkpoint carries a caption encoder, so "
+            "its states cannot be read from disk; run scripts/tokenize_captions.py over "
+            "this corpus to write the ids its encoder needs"
+        )
+    ids = np.load(ids_path, mmap_mode="r")
+    attn = np.load(data_dir / f"{split}_caption_attn.npy", mmap_mode="r")
+    rows = min(limit, len(ids)) if limit else len(ids)
+    states = np.zeros((rows, ids.shape[1], int(encoder.config.hidden_size)),
+                      dtype=np.float16)
+    with torch.no_grad():
+        for start in range(0, rows, batch):
+            stop = min(start + batch, rows)
+            chunk = torch.from_numpy(np.asarray(ids[start:stop], dtype=np.int64)).to(device)
+            mask = torch.from_numpy(np.asarray(attn[start:stop], dtype=np.int64)).to(device)
+            states[start:stop] = (
+                encoder(input_ids=chunk, attention_mask=mask)
+                .last_hidden_state.float().cpu().numpy().astype(np.float16))
+    return states, np.asarray(attn[:rows]).astype(bool)
+
+
 def stage_generate(args) -> None:
     import torch
     from omegaconf import OmegaConf
@@ -91,8 +131,23 @@ def stage_generate(args) -> None:
     canvas = int(cfg.variables.seq_len)
     path = build_path(cfg, seq_len=canvas, emb_dim=getattr(model, "latent_dim", model.config.emb_dim), device=device)
 
-    text = np.load(data_dir / f"{args.split}_text.npy", mmap_mode="r")
-    text_mask = np.load(data_dir / f"{args.split}_text_mask.npy", mmap_mode="r")
+    encoder = getattr(model, "text_encoder", None)
+    if encoder is None:
+        text = np.load(data_dir / f"{args.split}_text.npy", mmap_mode="r")
+        text_mask = np.load(data_dir / f"{args.split}_text_mask.npy", mmap_mode="r")
+    else:
+        if args.length_head is not None:
+            raise ValueError(
+                "--length-head was trained on the frozen states in the corpus, and this "
+                "checkpoint's encoder has moved away from them; the head would be read "
+                "off inputs it has never seen. Train a head on the exported corpus "
+                "(scripts/export_caption_states.py, then scripts/train_length_head.py "
+                "--data-dir) and pass its predictions with --length-file"
+            )
+        text, text_mask = encode_split_captions(encoder, data_dir, args.split,
+                                                args.limit, device)
+        print(f"  captions encoded by the checkpoint's own encoder, not "
+              f"{args.split}_text.npy")
     tokens = np.load(data_dir / f"{args.split}_tokens_00000.npy", mmap_mode="r")
     masks = np.load(data_dir / f"{args.split}_attn_mask_00000.npy", mmap_mode="r")
     n = min(args.limit, len(text)) if args.limit else len(text)

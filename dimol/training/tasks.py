@@ -337,21 +337,55 @@ class DiffusionTask(Task):
         # task is not an nn.Module, so "are we training" comes from the model.
         text_kwargs: Dict[str, torch.Tensor] = {}
         if int(getattr(raw_model.config, "text_dim", 0) or 0):
-            text = batch.get("text")
-            if text is None:
+            caption_ids = batch.get("caption_ids")
+            has_encoder = getattr(raw_model, "text_encoder", None) is not None
+            if caption_ids is not None and not has_encoder:
                 raise ValueError(
-                    "the model has a text path but the batch carries no 'text'; "
-                    "use the smiles_text_npy dataset"
+                    "the batch carries 'caption_ids' but the model has no caption "
+                    "encoder; set model.text_encoder, or use the smiles_text_npy dataset "
+                    "and condition on the precomputed states"
                 )
-            text_mask = batch.get("text_mask")
-            if text_mask is None:
-                text_mask = torch.ones(text.shape[:2], dtype=torch.bool,
-                                       device=text.device)
-            if raw_model.training and self.caption_dropout > 0:
-                keep = (torch.rand(text.shape[0], device=text.device)
-                        >= self.caption_dropout)
-                text_mask = text_mask.bool() & keep[:, None]
-            text_kwargs = {"text": text, "text_mask": text_mask}
+            if has_encoder and caption_ids is None:
+                raise ValueError(
+                    "the model has a caption encoder but the batch carries no "
+                    "'caption_ids'; use the smiles_caption_npy dataset. An encoder fed "
+                    "nothing gets no gradient, and a parameter with no gradient deadlocks "
+                    "DDP at find_unused_parameters=false"
+                )
+            if caption_ids is not None:
+                caption_attn = batch.get("caption_attn")
+                if caption_attn is None:
+                    caption_attn = torch.ones(caption_ids.shape, dtype=torch.bool,
+                                              device=caption_ids.device)
+                text_mask = caption_attn.bool()
+                # The same draw, of the same shape, in the same place as the branch below:
+                # an intervention that consumes randomness differently is not a controlled
+                # comparison, and this project has already paid for that once.
+                if raw_model.training and self.caption_dropout > 0:
+                    keep = (torch.rand(caption_ids.shape[0], device=caption_ids.device)
+                            >= self.caption_dropout)
+                    text_mask = text_mask & keep[:, None]
+                # The dropout lands on text_mask and never on caption_attn. What has to
+                # stop seeing the caption is the cross-attention, not the encoder that
+                # produces it: an all-False row into BERT is a softmax over nothing.
+                text_kwargs = {"caption_ids": caption_ids, "caption_attn": caption_attn,
+                               "text_mask": text_mask}
+            else:
+                text = batch.get("text")
+                if text is None:
+                    raise ValueError(
+                        "the model has a text path but the batch carries no 'text'; "
+                        "use the smiles_text_npy dataset"
+                    )
+                text_mask = batch.get("text_mask")
+                if text_mask is None:
+                    text_mask = torch.ones(text.shape[:2], dtype=torch.bool,
+                                           device=text.device)
+                if raw_model.training and self.caption_dropout > 0:
+                    keep = (torch.rand(text.shape[0], device=text.device)
+                            >= self.caption_dropout)
+                    text_mask = text_mask.bool() & keep[:, None]
+                text_kwargs = {"text": text, "text_mask": text_mask}
 
         x0_self = None
         if getattr(raw_model, "self_conditioning", False) and self.self_cond_prob > 0:

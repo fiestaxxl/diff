@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from dimol.data.collate import trim_collate
-from dimol.data.datasets import PairedSmilesTextDataset
+from dimol.data.datasets import PairedSmilesCaptionDataset, PairedSmilesTextDataset
 
 CANVAS, TEXT_LEN, TEXT_DIM = 16, 16, 4
 
@@ -77,3 +77,85 @@ def test_trimming_still_works_without_captions():
              for _ in range(3)]
     out = trim_collate(batch, multiple_of=8, min_len=8)
     assert out["token_ids"].shape[1] == 8
+
+
+# ------------------------------------------- caption ids, for encoding inside the loop
+
+CAPTION_LEN = 16
+
+
+def _write_captions(tmp_path, split="train", n=6, real=5, caption_tokens=12):
+    """The molecule arrays plus the caption ids, and deliberately no <split>_text.npy."""
+    tokens = np.zeros((n, CANVAS), dtype=np.uint16)
+    masks = np.zeros((n, CANVAS), dtype=np.uint8)
+    tokens[:, :real] = np.arange(1, real + 1)
+    masks[:, :real] = 1
+    np.save(tmp_path / f"{split}_tokens_00000.npy", tokens)
+    np.save(tmp_path / f"{split}_attn_mask_00000.npy", masks)
+    ids = np.zeros((n, CAPTION_LEN), dtype=np.uint16)
+    attn = np.zeros((n, CAPTION_LEN), dtype=np.uint8)
+    ids[:, :caption_tokens] = np.arange(101, 101 + caption_tokens)
+    attn[:, :caption_tokens] = 1
+    np.save(tmp_path / f"{split}_caption_ids.npy", ids)
+    np.save(tmp_path / f"{split}_caption_attn.npy", attn)
+    return tokens, ids, attn
+
+
+def test_a_row_carries_its_own_caption_ids(tmp_path):
+    tokens, ids, attn = _write_captions(tmp_path)
+    ds = PairedSmilesCaptionDataset(tmp_path, "train")
+    item = ds[3]
+    assert item["token_ids"].tolist() == tokens[3].tolist()
+    assert item["caption_ids"].tolist() == ids[3].tolist()
+    assert item["caption_ids"].dtype == torch.int64      # what an embedding table takes
+    assert item["caption_attn"].dtype == torch.bool
+    assert item["caption_attn"].tolist() == attn[3].astype(bool).tolist()
+
+
+def test_it_constructs_with_no_caption_states_present_at_all(tmp_path):
+    """The 5 GB of states are exactly what this dataset exists not to map."""
+    _write_captions(tmp_path)
+    assert not (tmp_path / "train_text.npy").exists()
+    ds = PairedSmilesCaptionDataset(tmp_path, "train")
+    assert len(ds) == 6 and "text" not in ds[0]
+
+
+def test_missing_caption_ids_name_the_script_that_writes_them(tmp_path):
+    _write_captions(tmp_path)
+    (tmp_path / "train_caption_ids.npy").unlink()
+    with pytest.raises(FileNotFoundError, match="tokenize_captions"):
+        PairedSmilesCaptionDataset(tmp_path, "train")
+
+
+def test_misaligned_caption_ids_are_refused(tmp_path):
+    _write_captions(tmp_path, n=6)
+    np.save(tmp_path / "train_caption_ids.npy",
+            np.zeros((5, CAPTION_LEN), dtype=np.uint16))
+    np.save(tmp_path / "train_caption_attn.npy",
+            np.zeros((5, CAPTION_LEN), dtype=np.uint8))
+    with pytest.raises(ValueError, match="not aligned"):
+        PairedSmilesCaptionDataset(tmp_path, "train")
+
+
+def test_the_text_index_indirection_still_applies(tmp_path):
+    """An augmented split holds several spellings of one molecule sharing one caption."""
+    _write_captions(tmp_path, n=6)
+    np.save(tmp_path / "train_caption_ids.npy",
+            np.arange(3 * CAPTION_LEN, dtype=np.uint16).reshape(3, CAPTION_LEN))
+    np.save(tmp_path / "train_caption_attn.npy", np.ones((3, CAPTION_LEN), dtype=np.uint8))
+    np.save(tmp_path / "train_text_index.npy", np.array([0, 0, 1, 1, 2, 2]))
+    ds = PairedSmilesCaptionDataset(tmp_path, "train")
+    assert ds[0]["caption_ids"].tolist() == ds[1]["caption_ids"].tolist()
+    assert ds[0]["caption_ids"].tolist() != ds[2]["caption_ids"].tolist()
+
+
+def test_trimming_shortens_the_molecule_and_leaves_the_caption_ids(tmp_path):
+    """The landmine: caption ids are (B, 128) on a 128-wide canvas, so the two axes have
+    the same length and only this list keeps BERT from being fed a truncated caption."""
+    _write_captions(tmp_path, real=5)
+    ds = PairedSmilesCaptionDataset(tmp_path, "train")
+    batch = trim_collate([ds[i] for i in range(4)], multiple_of=8, min_len=8)
+    assert batch["token_ids"].shape[1] == 8
+    assert batch["attention_mask"].shape[1] == 8
+    assert batch["caption_ids"].shape[1] == CAPTION_LEN
+    assert batch["caption_attn"].shape[1] == CAPTION_LEN

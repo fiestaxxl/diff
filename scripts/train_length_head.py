@@ -4,6 +4,10 @@
     python scripts/train_length_head.py --config configs/chebi20_finetune.yaml \
         --out data/chebi20/length_head.pt
 
+``--data-dir`` overrides the corpus the config names, which is how two sets of caption
+states are compared as states: the same script version, the same seed and the same epoch
+count on both, differing only in which directory the states came from.
+
 Reports the mean absolute error against two references: predicting the corpus mean, which
 is what ignoring the caption gets you, and the ridge regression on mean-pooled states,
 which is what a linear model on a worse summary gets you. If the head cannot beat those it
@@ -62,6 +66,12 @@ def evaluate(head, text, mask, lengths, device, batch_size):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--data-dir", type=Path, default=None,
+                        help="corpus to read the caption states from; defaults to "
+                             "variables.data_dir in the config. Pointing it at a "
+                             "re-exported corpus is how the states themselves are "
+                             "compared, with one config and one script version on "
+                             "both sides")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -70,7 +80,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
-    data_dir = Path(cfg.variables.data_dir)
+    data_dir = Path(args.data_dir or cfg.variables.data_dir)
     canvas = int(cfg.variables.seq_len)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)

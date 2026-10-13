@@ -77,6 +77,30 @@ class TransformerConfig:
     # that does not until training moves it.
     text_global: bool = False
 
+    # ---- caption encoder inside the loop ----
+    # Path to a huggingface encoder to run inside the forward pass, instead of reading
+    # states that were computed offline and frozen. Empty is the frozen path: no encoder,
+    # no transformers import, and a state dict identical to the one every number in this
+    # project came from.
+    #
+    # The motivation is measured rather than architectural. A caption-to-length head on
+    # the frozen states plateaus at 6.4 tokens of error while its own training loss keeps
+    # falling — limited by its inputs — and fine-tuning the same encoder on the same task
+    # reaches 3.3. The states have lost information the task needs, and nothing downstream
+    # of them can put it back.
+    text_encoder: str = ""
+
+    # How many of the encoder's top blocks take gradients. 0 freezes it completely, which
+    # is what makes a live encoder a control against the cached states rather than a
+    # second intervention; -1 trains every block. The encoder is 110M parameters against
+    # the backbone's 47.9M, so this is the knob that sets both the step time and the
+    # overfitting exposure on 25,574 pairs.
+    text_encoder_trainable_blocks: int = 0
+
+    # The embedding table is a fifth of the encoder and sees every caption token, so it is
+    # what overfits first on a corpus this size. Frozen unless asked for.
+    text_encoder_train_embeddings: bool = False
+
     # ---- content channel ----
     # The diffusion carries no representation of where the molecule ends. Measured
     # directly: with the canvas left unpinned, the tail latent sits about 0.08 from the
@@ -206,6 +230,56 @@ class DiffusionTransformer(nn.Module):
             with torch.no_grad():
                 self.up_proj.weight[:, config.emb_dim:].zero_()
 
+        # Built last, and the ordering is load-bearing: self.apply(self._init_params)
+        # above walks every submodule and would redraw the encoder's weights from
+        # Normal(0, 0.02), undoing the pretraining that is the entire reason to load one.
+        self.text_encoder = None
+        if config.text_encoder:
+            self.text_encoder = self._build_text_encoder(config)
+
+    def _build_text_encoder(self, config: TransformerConfig) -> nn.Module:
+        """Load the caption encoder and freeze all of it but the top blocks."""
+        # Imported here and not at module scope, so a model without an encoder carries no
+        # transformers dependency and the frozen path imports exactly what it did before.
+        from transformers import AutoModel
+
+        encoder = AutoModel.from_pretrained(
+            config.text_encoder,
+            add_pooling_layer=False,
+            # Dropout off. What this model is for is a deterministic export of caption
+            # states, and trainable_blocks=0 is the control that prices a live encoder
+            # against the cached one. With dropout active in train() mode neither holds,
+            # and the project would quietly acquire stochastic conditioning it has never
+            # used and never measured.
+            hidden_dropout_prob=0.0,
+            attention_probs_dropout_prob=0.0,
+        )
+        if int(encoder.config.hidden_size) != int(config.text_dim):
+            raise ValueError(
+                f"model.text_encoder has hidden size {encoder.config.hidden_size} but "
+                f"model.text_dim is {config.text_dim}; the cross-attention reads the "
+                "encoder's last hidden state directly, so the two have to agree"
+            )
+
+        # Frozen here, in the constructor, because build_optimizer runs after it:
+        # param_groups skips tensors with requires_grad=False, so a frozen block never
+        # enters the optimizer and never becomes a parameter DDP waits for a gradient on
+        # at find_unused_parameters=false.
+        encoder.requires_grad_(False)
+        blocks = int(config.text_encoder_trainable_blocks)
+        layers = encoder.encoder.layer
+        if blocks < 0:
+            thawed = list(layers)
+        elif blocks > 0:
+            thawed = list(layers[-blocks:])
+        else:
+            thawed = []
+        for layer in thawed:
+            layer.requires_grad_(True)
+        if config.text_encoder_train_embeddings:
+            encoder.embeddings.requires_grad_(True)
+        return encoder
+
     def _init_params(self, module):
         if isinstance(module, nn.Linear):
             # GPT-2 style: Normal(0, 0.02). Works well for transformer-scale models.
@@ -258,7 +332,37 @@ class DiffusionTransformer(nn.Module):
         length: Optional[torch.Tensor] = None,   # non-padding token count, (B,)
         text: Optional[torch.Tensor] = None,     # frozen caption encoding, (B, S, text_dim)
         text_mask: Optional[torch.Tensor] = None,  # (B, S), True where a token is real
+        caption_ids: Optional[torch.Tensor] = None,   # caption token ids, (B, S)
+        caption_attn: Optional[torch.Tensor] = None,  # (B, S), True where a token is real
     ):
+        # The caption encoded here instead of read from disk. This block produces the same
+        # two tensors the frozen path loads, and every line below it then runs unchanged —
+        # text_global, the per-block cross-attention, the zeroed output projection and the
+        # readout cannot tell which path filled them in.
+        if caption_ids is not None:
+            if self.text_encoder is None:
+                raise ValueError(
+                    "caption_ids were passed but model.text_encoder is unset; this model "
+                    "conditions on precomputed states, so pass text= instead"
+                )
+            if text is not None:
+                raise ValueError(
+                    "text and caption_ids were both passed; the caption would be encoded "
+                    "twice and only one of the two would reach the cross-attention"
+                )
+            if caption_attn is None:
+                caption_attn = torch.ones_like(caption_ids, dtype=torch.bool)
+            text = self.text_encoder(
+                input_ids=caption_ids, attention_mask=caption_attn.long()
+            ).last_hidden_state
+            if text_mask is None:
+                text_mask = caption_attn.bool()
+        elif caption_attn is not None:
+            raise ValueError(
+                "caption_attn was passed without caption_ids; nothing would read it, and "
+                "the caption would silently reach the model unmasked"
+            )
+
         if self.self_conditioning:
             if x0_self is None:
                 x0_self = torch.zeros_like(input_embeddings)

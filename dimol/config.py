@@ -97,6 +97,13 @@ class OptimizerConfig:
     eps: float = 1e-8
     weight_decay: float = 0.01
     fused: Optional[bool] = None  # None -> auto: cuda and supported by torch
+    # {parameter-name substring: multiplier on the scheduled rate}. None is the default
+    # and the only behaviour any measured run has: one rate for every group. It exists for
+    # a pretrained submodule fine-tuned beside freshly initialised ones, which need
+    # different steps and have only one scheduler between them. The matching is by
+    # SUBSTRING and the first pattern wins (dimol/training/optim.py), so a pattern needs
+    # its trailing dot: "layer.1" also matches layer.11.
+    lr_mult: Optional[Dict[str, float]] = None
 
 
 @dataclass

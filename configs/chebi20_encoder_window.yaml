@@ -1,0 +1,432 @@
+# ChEBI-20, phase 1: the caption encoder inside the training loop for 6,000 steps.
+#
+#   bash scripts/train.sh configs/chebi20_encoder_window.yaml --gpus 4 run_name=enc_win
+#
+# WHY THIS EXISTS. The caption reaches the model only through states a FROZEN SciBERT
+# produced offline, and those states are measurably lossy: a length head on them plateaus
+# at 6.4 tokens of error while its own training loss keeps falling, and fine-tuning the
+# same encoder on the same task reaches 3.3. If the length is gone, substructure detail is
+# gone too, and substructure is where this model's numbers lag (RDK 0.629 and Morgan 0.545
+# against TGM-DLM's 0.739 and 0.688). This config opens a short window in which the encoder
+# can move, then the window is closed again and the states are exported.
+#
+# THE FOUR-PHASE CHAIN. Only phase 1 uses this file. Phases 0 and 2 are the SHIPPED
+# configs/chebi20_finetune.yaml with command-line overrides, so the long run and the
+# measured baseline cannot drift apart in a field nobody looked at:
+#
+#   P0  warm the cross-attention, 6,000 steps, no encoder.    chebi20_finetune.yaml
+#         run_name=chebi_warm scheduler.max_lr=3.0e-4
+#   P1  THIS FILE: 6,000 steps with the top 4 encoder blocks live at 2.0e-5.
+#   P1c the control: another 6,000 steps on cached states from the P0 checkpoint.
+#         chebi20_finetune.yaml run_name=enc_ctl scheduler.max_lr=3.0e-4
+#         load_path=checkpoints/chebi_warm/<last> load_weights_only=true
+#         Without it "more steps" explains any gain the window shows.
+#   P2  the full run, only if the gate passes: chebi20_finetune.yaml with
+#         variables.data_dir pointed at the corpus exported from the P1 checkpoint.
+#         Same code, same init, same step count, same step time as the baseline; the only
+#         thing that differs from the measured record is the bytes in <split>_text.npy.
+#
+# The export checkpoint is PRE-REGISTERED as the last one, 6000ba. The per-checkpoint
+# length-head curve is a diagnostic for overfitting, not a selection rule — checkpoints in
+# this project are never chosen by a number measured after the fact, and never by loss
+# (r = +0.46, the wrong sign).
+#
+# WHAT THIS COSTS. SciBERT is 110M parameters against the backbone's 47.9M, so the step
+# time roughly triples. It is bounded three ways: only the top four blocks take gradients
+# (the frozen blocks below them store no activations, because their outputs carry
+# requires_grad=False), the embedding table stays frozen, and the window is 6,000 steps —
+# about 60 epochs over 25,574 pairs, where train_length_encoder.py overfits in 8.
+#
+# Everything else below is chebi20_finetune.yaml unchanged.
+
+run_name: enc_win             # names the checkpoint dir and the comet experiment;
+                               # change it for every run, otherwise autoresume picks
+                               # up the previous run's checkpoints
+task: diffusion                # diffusion | ar. Selects the loss and the model family
+seed: 42                       # base seed; each rank gets seed + rank so that the
+                               # noise draws differ across replicas
+
+# Values referenced elsewhere as ${variables.x}. Nothing reads this section directly,
+# it only exists to keep the numbers that appear in several places in one spot.
+variables:
+  seq_len: 128                 # stored sequence length of the tokenized arrays; the
+                               # audit put the training p99 at 37 tokens and the max at
+                               # 62, so 64 loses nothing (docs/tokenizer-zinc250k.md)
+  data_dir: data/chebi20/tokenized               # where <split>_tokens_*.npy live
+  tokenizer_path: data/shared/tokenizers/zinc20_chebi.json
+                               # the SHARED ZINC-20 + ChEBI tokenizer, 635 tokens, which is
+                               # what tokenized this corpus. Pointing this at the 391-token
+                               # ZINC-250k tokenizer -- which it did -- silently mis-decodes
+                               # 196 of 3,202 test references (6.1%): 95 to unparseable
+                               # strings and the rest to a DIFFERENT molecule, because salts,
+                               # hydrates, charged nitrogen and metals all live above id 386.
+                               # Only the 95 is measured. Every pre-fix full-split run records
+                               # unparseable_reference = 95 and every post-fix run records 0;
+                               # how the remainder splits is not recorded anywhere. This
+                               # comment used to read "75 become unparseable and 121 become a
+                               # different molecule", and 75 is not a number the scorer has
+                               # ever produced, so it is withdrawn. See EXPERIMENTS.md,
+                               # "What ChEBI-20 actually measures".
+                               # It also truncates the decoder's logits to 386, so no
+                               # generated string could ever contain a disconnection dot.
+  vocab_size: 640              # the shared ZINC-20 + ChEBI tokenizer has 630 tokens,
+                               # the extra rows simply never get used
+  pad_idx: 0
+
+tokenizer:
+  path: ${variables.tokenizer_path}   # needed for the grammar loss tables and for
+                                      # decoding samples during training
+
+#############
+### Model ###
+#############
+model:
+  name: diffusion_transformer  # registry key; see dimol/builders.py
+  model_dim: 640               # residual stream width; the main capacity/speed knob.
+                               # This is the shape of the backbone being fine-tuned,
+                               # 47.9M parameters, and it has to match the checkpoint
+  emb_dim: 32                  # dimension of the latent the diffusion actually runs in
+                               # (token embeddings). Raising it makes the denoising
+                               # problem higher-dimensional but gives the decoder more
+                               # room; it also sets p_simple's shape
+  time_dim: 256                # width of the timestep embedding fed to adaLN modulation
+  num_heads: 10                # model_dim / num_heads = 64 = head_dim, a good size for
+                               # flash attention; keep the ratio at 64 when scaling
+  num_text_blocks: 8           # transformer blocks in the denoiser; depth knob.
+                               # 256/4 gives 5.0M parameters: the workhorse for testing
+                               # hypotheses fast. Scale it up with the same tokens per
+                               # parameter budget (see docs/scaling-zinc250k.md)
+  tie_readout: false           # true makes the readout the embedding table itself, so it
+                               # is a similarity to the current embeddings instead of a
+                               # separate matrix chasing a table whose norm grows fiftyfold
+                               # over a run
+  length_conditioning: true    # true gives the model the non-padding token count as an
+                               # input, embedded like the timestep and added to it.
+                               # Training reads it from the attention mask, sampling draws
+                               # it from generate.length_prior. Conditioning only at
+                               # sampling time does not work: the model's plan for the
+                               # canvas never depended on the length, and forcing it to
+                               # fill one produced 60-atom garbage
+  text_dim: 768
+  text_encoder: /workspace-SR008.nfs2/iseguryev/diffusion/raw/scibert
+                               # the encoder run INSIDE the forward pass. Empty is the
+                               # frozen path, which is what every recorded number came
+                               # from; this is the only run that sets it
+  text_encoder_trainable_blocks: 4
+                               # top blocks taking gradients. 0 is the control that prices
+                               # a live fp32 encoder against the fp16 cache, -1 is all 12.
+                               # Four is the compromise between "the states can move" and
+                               # "110M parameters on 25,574 pairs"
+  text_encoder_train_embeddings: false
+                               # the table is a fifth of the encoder and sees every caption
+                               # token, so it is what overfits a corpus this size first
+  pad_variants: 1              # >1 spreads padding over that many ids, assigned
+                               # cyclically by position, so the diffusion is not asked to
+                               # produce one identical value at ~70% of the canvas. The
+                               # tail latent was measured to sit ~0.08 from the padding
+                               # embedding and the same from the nearest real token, with
+                               # no structure, which is what a degenerate target looks
+                               # like. 1 reproduces the original behaviour exactly.
+  pad_variant_base: 0          # first variant id; 0 takes them from the top of the vocab
+  content_channel: false       # true adds one channel to the latent, diffused with
+                               # the embedding channels: positive where the molecule
+                               # continues, negative past its end. Termination becomes
+                               # something the model generates and revises at every solver
+                               # step instead of a number handed to it before the
+                               # trajectory starts. Measured motivation: with the canvas
+                               # unpinned the tail latent sits ~0.08 from the padding
+                               # embedding and the same from the nearest real token, so
+                               # the diffusion currently encodes nothing about the end.
+  text_global: false           # true also pools the caption into one vector and adds it
+                               # to the adaLN modulation beside the timestep, so global
+                               # facts (size, ring count, charge) have a global path
+                               # instead of only per-position cross-attention. The
+                               # projection is zero-initialised, so false and true start
+                               # from identical behaviour.                # width of the frozen SciBERT encoding. Setting it gives
+                               # every block a cross-attention into the caption, with a
+                               # zeroed output projection, so this config loads the ZINC
+                               # checkpoint unchanged and the text path grows from nothing
+  self_conditioning: true      # true gives the denoiser a second input of the same shape
+                               # as the latent: its own previous estimate of x0. Training
+                               # produces that estimate on loss.self_cond_prob of the
+                               # steps with one extra forward and no backward, sampling
+                               # carries it from the previous solver step. The extra half
+                               # of up_proj starts at zero, so a fresh model is unchanged
+  vocab_size: ${variables.vocab_size}   # must be >= the tokenizer vocab (checked)
+  pad_idx: ${variables.pad_idx}         # row kept at zero in the embedding table
+  max_pos: 128                 # RoPE table size; must be >= seq_len. ChEBI needs 128,
+                               # and RoPE rebuilds its table from this at construction,
+                               # so growing it needs no checkpoint surgery
+  attn_dropout: 0.0            # dropout inside attention; raise only if the model
+                               # starts overfitting a small corpus
+
+#################
+### Diffusion ###
+#################
+diffusion:
+  regime: epsilon              # what the network predicts: epsilon (the noise) or x
+                               # (the clean latent). Changes the target and how x0_hat
+                               # is reconstructed; an ablation axis
+  alpha: {name: cosine}        # alpha(0)=0, alpha(1)=1: how much signal survives at t
+  beta: {name: cosine}         # beta(0)=1, beta(1)=0: how much noise is added at t.
+                               # cosine gives alpha^2 + beta^2 = 1 (variance preserving)
+  x0_noise_std: 0.25           # extra Gaussian noise added to the token embeddings
+                               # before diffusion; it smooths the discrete data into a
+                               # continuous distribution. Compare it against the actual
+                               # embedding scale: if it dominates, the model mostly sees
+                               # noise (see docs/diffusion-review.md)
+  t_eps: 5.0e-5                # t is drawn from [t_eps, 1 - t_eps]; keeps alpha and beta
+                               # away from the degenerate endpoints
+  p_simple_std: 1.0            # std of the prior the sampler starts from; should match
+                               # the std of the data latents, otherwise sampling starts
+                               # off-distribution
+
+loss:
+  lambda_mse: 1.0              # weight of the denoising MSE, the diffusion objective
+                               # proper. It also multiplies the reconstruction term
+  lambda_ce: 1.0               # weight of the cross-entropy that trains the readout
+                               # (latent -> token). Set to 0 to train pure diffusion
+  lambda_grammar: 0.0          # weight of the SMILES grammar penalty (bracket balance
+                               # and ring parity). 0 disables the term and its compute
+  alpha_eps: 1.0e-3            # alpha is clamped to this before dividing by it when
+                               # reconstructing x0_hat; guards t -> 0
+  ce_alpha_threshold: 0.80     # cross-entropy is computed only on samples whose alpha
+                               # exceeds this, i.e. the low-noise part of the batch.
+                               # Lower it to train the readout on noisier latents
+  mse_t0_alpha_threshold: 0.80 # same gate for the reconstruction term
+  grammar_alpha_threshold: 0.5 # same gate for the grammar term
+  label_smoothing: 0.0         # label smoothing inside the cross-entropy. 0.05 measured
+                               # slightly above the reference at 80 tokens per parameter
+  pad_weight: 1.0              # weight of padding positions in the denoising MSE.
+                               # 1.0 = original behaviour, 0.0 is the same as taking
+                               # padding out of the loss. Padding is the only signal that
+                               # tells the model where a molecule ends, so lowering this
+                               # costs validity: 0.3 measured below the reference
+  min_snr_gamma: null          # null = every timestep weighted alike (original). A number
+                               # caps the per-sample weight at min(SNR, gamma)/SNR. Do not
+                               # turn this on here: the cross-entropy and reconstruction
+                               # terms are gated to high-SNR steps, so capping them
+                               # removes the token-level supervision (0.47% vs 5.28%)
+  gate_mode: threshold         # threshold = original: the cross-entropy and the
+                               # reconstruction term run on the samples whose alpha
+                               # exceeds the thresholds below, so the share of a batch
+                               # they see fluctuates and shifts with the timestep density.
+                               # topk takes a fixed share of every batch instead, which
+                               # makes the token-level supervision per step deterministic
+  gate_fraction: 0.41          # that share, used only by gate_mode=topk. 0.41 is what
+                               # alpha > 0.8 selects on average under uniform timesteps
+  caption_dropout: 0.1         # share of examples whose caption is masked out, which is
+                               # what buys classifier-free guidance: one set of weights
+                               # learns the conditional and the unconditional score. 1.0
+                               # is refused, it would leave the text path untrainable
+  self_cond_prob: 0.5          # share of steps that get the self-conditioning pass, and
+                               # it must stay below 1: the model has to work with a zeroed
+                               # second input too, because the first solver step has no
+                               # previous estimate. Ignored unless the model declares it
+  ce_include_pad: false        # false = original behaviour, the cross-entropy ignores
+                               # padding, so the readout is never told to emit it. true
+                               # supervises termination explicitly at the cost of a very
+                               # frequent easy class
+  grammar_enabled: true        # build the grammar tables at all; with lambda_grammar=0
+                               # the term and its softmax are skipped entirely
+  ce_input: x0                 # x0 = original behaviour, the readout is trained on the
+                               # data latents and never on the denoiser output, which is
+                               # what it gets at sampling time. x0_hat trains it on the
+                               # reconstruction instead and back-propagates through the
+                               # denoiser
+  mask_padding: false          # false = original behaviour: padding takes part in
+                               # attention and in the MSE terms. true = pads are excluded
+                               # from attention and from both MSE terms, which makes the
+                               # loss independent of how much padding a batch holds.
+                               # Required before turning on bucket_by_length; it changes
+                               # the objective, so re-measure the baseline
+  autocast_scope: loss         # loss = autocast covers the readout and the loss (the
+                               # (B, L, V) logits then live in bf16); forward = only the
+                               # denoiser runs under autocast, as before the refactor
+  class_weights_path: null     # optional per-token weights for the cross-entropy,
+                               # e.g. data/class_weights.pt from scripts/train_tokenizer.py
+
+##################
+### Dataloader ###
+##################
+train_loader:
+  dataset:
+    name: smiles_caption_npy   # registry key; molecules plus their caption TOKEN IDS.
+                               # Not smiles_text_npy: this run encodes the caption itself,
+                               # so <split>_text.npy is 5 GB of memory map it would never
+                               # read. The ids are 12 MB for all three splits
+    data_dir: ${variables.data_dir}
+    split: train
+    mmap: true                 # memory-map the arrays instead of loading them into RAM;
+                               # turn off only for a tiny corpus on a fast disk
+  shuffle: true                # reshuffled every epoch (through the sampler under DDP)
+  drop_last: true              # drop the last incomplete batch, keeps step sizes equal
+  num_workers: 4               # dataloader processes per rank; raise until the GPU stops
+                               # waiting for data, watch host RAM
+  pin_memory: true             # pinned host memory, required for a fast async H2D copy
+  persistent_workers: true     # keep workers alive between epochs; saves the restart cost
+  prefetch_factor: 2           # batches prefetched per worker
+  # Batch molecules of similar length and cut every batch to its own longest sequence.
+  # With ~80% padding this is the single largest speed-up available, but it only makes
+  # sense together with loss.mask_padding=true (see docs/pipeline.md, section 7).
+  bucket_by_length: false
+  bucket_pool_factor: 64       # pool = 64 batches, sorted inside and shuffled outside;
+                               # larger = more homogeneous batches, less randomness
+  trim_to_multiple_of: 8       # round the trimmed length up to a multiple of 8
+
+eval_loader:
+  dataset:
+    name: smiles_caption_npy
+    data_dir: ${variables.data_dir}
+    split: val
+    mmap: true
+  shuffle: false               # keep the eval order fixed so numbers are comparable
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+####################
+### Optimization ###
+####################
+optimizer:
+  name: adamw
+  lr: 1.0e-4                   # only the initial value; the schedule overwrites it every
+                               # step, so tune scheduler.max_lr instead
+  betas: [0.9, 0.95]           # second beta lower than torch's default, as in GPT-style
+                               # training: reacts faster to gradient scale changes
+  eps: 1.0e-8
+  weight_decay: 0.01           # applied to matrices only; token_embedding, biases and
+                               # norms are excluded (see dimol/training/optim.py)
+  fused: null                  # null = auto (fused kernel on CUDA); force false to debug
+  lr_mult:                     # per-group multiplier on the scheduled rate
+    "text_encoder.": 0.067     # 0.067 x 3e-4 = 2.0e-5, which is both the canonical BERT
+                               # fine-tuning rate and what train_length_encoder.py used to
+                               # reach MAE 3.3. ONE knob, bracketed on both sides in the
+                               # follow-ups (0.023 and 0.2), as every other rate in this
+                               # project was. A layer-wise map is four unmeasured knobs and
+                               # is deferred.
+                               # The trailing dot is load-bearing: param_groups matches by
+                               # substring, so "text_encoder" alone is fine but a
+                               # layer-wise "layer.1" would also catch layer.11
+
+scheduler:
+  name: warmup_cosine          # linear warmup then cosine decay to min_lr
+  max_lr: 3.0e-4               # peak lr reached at the end of warmup. This is the knob
+                               # that matters, not optimizer.lr, which the schedule
+                               # overwrites every step. Pretraining used 6e-4; a
+                               # fine-tune on 25k pairs runs an order of magnitude below
+                               # that, or it overwrites the chemistry the backbone knows
+  min_lr: 1.0e-5               # lr after t_max and the floor of the cosine
+  t_warmup: 200ba              # warmup length in optimizer steps (ba) or epochs (ep).
+                               # Doubled from the shipped 100: the ramp from zero is also
+                               # what eases the encoder in, so "warm the cross-attention,
+                               # then move the encoder" needs no trainer change at all
+  t_max: 6000ba                # where the cosine bottoms out; keep it at max_duration
+
+algorithms:
+  gradient_clipping:
+    clipping_type: norm        # only global-norm clipping is implemented
+    clipping_threshold: 1.0    # null disables clipping; watch gnorm in the log to tune
+
+#######################
+### Training params ###
+#######################
+max_duration: 6000ba           # the token budget, in optimizer steps. ZINC train holds
+                               # 5.06M real tokens per epoch and 224,568 molecules, so at
+                               # global batch 1024 one epoch is 219 steps. 2200 steps is
+                               # 10 epochs, i.e. 10 tokens per parameter for the 5.0M
+                               # model. Keep the tokens-per-parameter constant when the
+                               # model changes: steps = 20 * params / (1024 * 22.5)
+global_train_batch_size: 256   # molecules per optimizer step across all ranks. Fixed on
+                               # purpose: the token budget is expressed in steps, so the
+                               # batch must not drift with the number of GPUs
+device_train_microbatch_size: 256   # molecules per forward pass per GPU; the memory knob.
+                               # grad accumulation is derived: global / (micro * n_gpus).
+                               # Throughput saturates near 3M tokens/s around 2048, and a
+                               # bigger batch would only cut the number of optimizer steps
+device_eval_batch_size: 2048   # same for evaluation, where no gradients are stored
+eval_interval: 200ba            # how often the eval loader runs
+eval_subset_num_batches: -1    # -1 = whole eval split; a positive number caps it
+eval_before_train: skip        # skip | regular: run one evaluation before step 1
+decoder_pretrain_steps: 0      # first N steps train with lambda_mse = 0, i.e. readout
+                               # only. 0 disables this warmup
+
+precision: amp_bf16            # amp_bf16 | amp_fp16 | fp32. bf16 needs no GradScaler and
+                               # is the right choice on Ampere and newer; amp_fp16
+                               # reproduces the pre-refactor numerics
+tf32: true                     # TensorFloat-32 matmuls on Ampere+; a no-op elsewhere
+compile: false                 # torch.compile now wraps a BertModel as well: expect
+                               # graph breaks, and the window is 6,000 steps, so the
+                               # compilation would not pay for itself. It changes no
+                               # numerics, only speed
+compile_backend: inductor      # inductor is the real backend; aot_eager only for debugging
+deterministic: false           # cudnn deterministic kernels; slower, for bit-exact reruns
+sync_each_step: true           # cuda.synchronize() before measuring the step; makes the
+                               # reported tok/s honest at a negligible cost
+dist_timeout: 1800             # seconds before a collective operation gives up
+ddp_config:
+  backend: nccl                # nccl on GPU, gloo for a CPU debug run
+  find_unused_parameters: false   # keep false; true costs a full graph traversal per step
+  gradient_as_bucket_view: true   # gradients live inside the DDP buckets, saves a copy
+
+###############
+### Logging ###
+###############
+log_to_console: true
+console_log_interval: 1ba      # every step: loss, accuracy, tokens-per-sec
+loggers:
+  console: {}
+  jsonl: {}                    # metrics.jsonl inside the run dir, one line per event
+  comet:
+    enabled: false             # off by request; console and metrics.jsonl are enough
+    project_name: diffusion_smiles_model
+    mode: create               # create a new experiment instead of resuming one
+
+########################
+### Saving & Loading ###
+########################
+save_folder: checkpoints       # run dir is <save_folder>/<run_name>
+save_interval: 1000ba          # how often a checkpoint is written
+save_num_checkpoints_to_keep: 8   # all six window checkpoints survive, so the length-head
+                                  # curve over them can be read as a diagnostic
+save_last: true                # always write a checkpoint when training ends
+save_weights_only: false       # true skips optimizer/scaler state, which breaks resume
+autoresume: false              # this is a fine-tune from load_path, not a resume
+load_path: checkpoints/chebi_warm/PHASE0_CHECKPOINT
+                               # The PHASE 0 checkpoint, not the grown ZINC one: the
+                               # cross-attention output projection is zeroed at init, so
+                               # dL/d(text) is exactly zero at step 0 and noise for a long
+                               # while after, and handing a 110M encoder that gradient is
+                               # not an experiment. Phase 0 warms the graft first.
+                               #
+                               # Deliberately not a real directory. The run dir is named
+                               # ep<E>-ba<N> and E depends on the split, so this has to be
+                               # passed on the command line
+                               # (load_path=checkpoints/chebi_warm/ep60-ba6000). A path
+                               # that does not exist stops the run on step zero; load_path:
+                               # null would start it from random weights in silence, which
+                               # is the worse of the two failures by a wide margin.
+                               #
+                               # The loader prints every key it did not find, and here that
+                               # list is the whole encoder: phase 0 saved no text_encoder.*
+                               # tensors, so SciBERT keeps the weights from_pretrained gave
+                               # it. That print is the audit, as it was for the
+                               # cross-attention when this stage started
+load_weights_only: true        # weights only: no optimizer state, step counter at zero.
+                               # The cross-attention tensors are absent from the ZINC
+                               # checkpoint and stay at their zero init; the loader prints
+                               # which keys it did not find, and that list is the audit
+
+################
+### Sampling ###
+################
+sampling:
+  enabled: false               # The generic callback samples unconditionally, which for
+                               # a text-conditioned model measures nothing: it would draw
+                               # molecules with no caption and score them against no
+                               # reference. It also cannot run at all here, because a
+                               # length-conditioned model needs a length prior it has no
+                               # way to know about. Quality during this run is measured by
+                               # scripts/eval_text.py against saved checkpoints instead.

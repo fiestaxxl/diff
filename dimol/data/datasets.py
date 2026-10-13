@@ -204,6 +204,78 @@ registry.datasets.register("smiles_text_npy")(PairedSmilesTextDataset)
 registry.datasets.register("random")(SimpleDataset)
 
 
+@registry.datasets.register("smiles_caption_npy")
+class PairedSmilesCaptionDataset(SmilesDataset):
+    """A tokenized split plus the caption TOKEN IDS, for encoding inside the loop.
+
+    Adds to the molecule layout, written by scripts/tokenize_captions.py:
+
+        <data_dir>/<split>_caption_ids.npy    (N, S) uint16
+        <data_dir>/<split>_caption_attn.npy   (N, S) uint8
+
+    It subclasses the plain molecule dataset rather than PairedSmilesTextDataset on
+    purpose, so it never requires or maps <split>_text.npy. A run that encodes captions in
+    the loop has no use for the precomputed states, and mapping them anyway would cost 5 GB
+    of address space per worker and push the molecule arrays out of the page cache for
+    nothing. The ids are 12 MB for all three splits.
+
+    Row i of every array is the same pair, exactly as in the paired dataset, and the same
+    <split>_text_index.npy indirection applies: an augmented split holds several spellings
+    of one molecule sharing one caption.
+    """
+
+    def __init__(self, data_dir: str | Path, split: str, mmap: bool = True):
+        super().__init__(data_dir, split, mmap=mmap)
+        directory = Path(data_dir)
+        ids_path = directory / f"{split}_caption_ids.npy"
+        attn_path = directory / f"{split}_caption_attn.npy"
+        for path in (ids_path, attn_path):
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} is missing; run scripts/tokenize_captions.py"
+                )
+        how = "r" if mmap else None
+        self.caption_ids = np.load(ids_path, mmap_mode=how)
+        self.caption_attn = np.load(attn_path, mmap_mode=how)
+        if self.caption_ids.shape != self.caption_attn.shape:
+            raise ValueError(
+                f"split {split!r}: caption ids are {self.caption_ids.shape} but the "
+                f"caption mask is {self.caption_attn.shape}"
+            )
+
+        index_path = directory / f"{split}_text_index.npy"
+        self.text_index = None
+        if index_path.exists():
+            self.text_index = np.load(index_path)
+            if len(self.text_index) != self.num_samples:
+                raise ValueError(
+                    f"split {split!r}: {self.num_samples} molecules but "
+                    f"{len(self.text_index)} rows in {index_path.name}"
+                )
+            largest = int(self.text_index.max()) if self.num_samples else -1
+            if largest >= len(self.caption_ids):
+                raise ValueError(
+                    f"split {split!r}: {index_path.name} points at caption row "
+                    f"{largest} but only {len(self.caption_ids)} captions exist"
+                )
+        elif len(self.caption_ids) != self.num_samples:
+            raise ValueError(
+                f"split {split!r}: {self.num_samples} molecules but "
+                f"{len(self.caption_ids)} captions; the arrays are not aligned"
+            )
+
+    def __getitem__(self, idx: int) -> dict:
+        item = super().__getitem__(idx)
+        if idx < 0:
+            idx += self.num_samples
+        row = int(self.text_index[idx]) if self.text_index is not None else idx
+        item["caption_ids"] = torch.from_numpy(
+            np.asarray(self.caption_ids[row], dtype=np.int64))
+        item["caption_attn"] = torch.from_numpy(
+            np.asarray(self.caption_attn[row]).astype(bool))
+        return item
+
+
 @registry.datasets.register("preference_text_npy")
 class PreferenceSmilesTextDataset(PairedSmilesTextDataset):
     """A winning and a losing molecule for one caption, for preference optimisation.

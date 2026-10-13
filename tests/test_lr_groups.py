@@ -85,3 +85,77 @@ def test_the_training_loop_multiplies_rather_than_overwrites():
         g["lr"] = 3e-4 * float(g.get("lr_mult", 1.0))
     got = [g["lr"] for g in opt.param_groups]
     assert got[0] == pytest.approx(3e-4) and got[1] == pytest.approx(3e-5)
+
+
+# ------------------------------------- the same mechanism against real parameter names
+
+HIDDEN = 32
+
+
+def _real_denoiser(tmp_path, layers: int = 12, blocks: int = -1):
+    """The actual model, not a toy nn.Sequential: the patterns are matched by substring."""
+    pytest.importorskip("transformers")
+    from transformers import BertConfig, BertModel
+
+    from dimol.models.diffusion_transformer import DiffusionTransformer, TransformerConfig
+
+    path = tmp_path / "enc"
+    BertModel(BertConfig(
+        vocab_size=48, hidden_size=HIDDEN, num_hidden_layers=layers,
+        num_attention_heads=4, intermediate_size=2 * HIDDEN,
+        max_position_embeddings=32), add_pooling_layer=False).save_pretrained(path)
+    return DiffusionTransformer(TransformerConfig(
+        model_dim=HIDDEN, emb_dim=8, time_dim=HIDDEN, num_heads=4, num_text_blocks=2,
+        vocab_size=64, pad_idx=0, max_pos=16, text_dim=HIDDEN, text_global=True,
+        text_encoder=str(path), text_encoder_trainable_blocks=blocks))
+
+
+def _names_by_mult(model, groups) -> dict:
+    name_of = {id(p): n for n, p in model.named_parameters()}
+    out: dict = {}
+    for group in groups:
+        out.setdefault(group["lr_mult"], set()).update(
+            name_of[id(p)] for p in group["params"])
+    return out
+
+
+def test_the_encoder_pattern_slows_the_encoder_and_nothing_else(tmp_path):
+    """The denoiser's own text modules — text_transformer_blocks, text_rope_embeddings,
+    text_global_proj — all contain "text", so a looser pattern would put the entire
+    backbone on a fifteenth of the rate without a word in any log."""
+    model = _real_denoiser(tmp_path)
+    buckets = _names_by_mult(model, param_groups(
+        model, weight_decay=0.1, no_decay_patterns=["token_embedding"],
+        lr_mult_patterns={"text_encoder.": 0.067}, verbose=False))
+
+    assert set(buckets) == {1.0, 0.067}
+    assert buckets[0.067] and all(n.startswith("text_encoder.") for n in buckets[0.067])
+    assert any(n.startswith("text_transformer_blocks.") for n in buckets[1.0])
+    assert "text_global_proj.weight" in buckets[1.0]
+    assert not any(n.startswith("text_encoder.") for n in buckets[1.0])
+
+
+def test_a_frozen_encoder_block_never_reaches_the_optimizer(tmp_path):
+    """Freezing happens in the constructor so that this holds: a parameter the optimizer
+    never sees is also a parameter DDP never waits for a gradient on."""
+    model = _real_denoiser(tmp_path, layers=4, blocks=2)
+    buckets = _names_by_mult(model, param_groups(
+        model, weight_decay=0.1, lr_mult_patterns={"text_encoder.": 0.067}, verbose=False))
+    assert {n.split(".")[3] for n in buckets[0.067]} == {"2", "3"}
+    assert not any("embeddings" in n for n in buckets[0.067])
+
+
+def test_a_layer_pattern_without_its_trailing_dot_catches_layer_eleven(tmp_path):
+    """Substring matching, so "layer.1" is also a prefix of "layer.11", "layer.12"... A
+    layer-wise rate map written without the trailing dot silently slows four extra blocks."""
+    model = _real_denoiser(tmp_path, layers=12)
+    loose = _names_by_mult(model, param_groups(
+        model, weight_decay=0.0,
+        lr_mult_patterns={"text_encoder.encoder.layer.1": 0.5}, verbose=False))
+    tight = _names_by_mult(model, param_groups(
+        model, weight_decay=0.0,
+        lr_mult_patterns={"text_encoder.encoder.layer.1.": 0.5}, verbose=False))
+
+    assert any(".layer.11." in n for n in loose[0.5])
+    assert all(".layer.1." in n for n in tight[0.5])
+    assert not any(".layer.11." in n for n in tight[0.5])
