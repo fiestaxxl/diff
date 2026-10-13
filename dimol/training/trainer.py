@@ -223,7 +223,12 @@ class Trainer:
                 grad_norm = self._clip_gradients()
                 lr = self.scheduler(self.state.step)
                 for param_group in optimizer.param_groups:
-                    param_group["lr"] = lr
+                    # The scheduler yields one number for the run; a group may ask for a
+                    # fraction of it. Writing `lr` flat here, as this did, silently undid
+                    # every per-group multiplier at every single step, so a fine-tuned
+                    # submodule trained at the same rate as a freshly initialised one no
+                    # matter what the config said.
+                    param_group["lr"] = lr * float(param_group.get("lr_mult", 1.0))
 
                 if self.scaler is not None:
                     self.scaler.step(optimizer)

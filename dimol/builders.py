@@ -233,10 +233,21 @@ def build_optimizer(
         # old behaviour: the denoiser kept token_embedding out of weight decay,
         # while the AR model had no special rules
         no_decay = ["token_embedding"] if str(cfg.task) == "diffusion" else []
+    # optimizer.lr_mult: {name_substring: multiplier}. A pretrained submodule being
+    # fine-tuned beside freshly initialised ones needs a smaller step than they do, and
+    # the scheduler only produces one number.
+    lr_mult = node.pop("lr_mult", None)
+    if lr_mult is not None:
+        from omegaconf import OmegaConf as _OC
+
+        lr_mult = {str(k): float(v) for k, v in _OC.to_container(lr_mult).items()} \
+            if not isinstance(lr_mult, dict) else {str(k): float(v)
+                                                   for k, v in lr_mult.items()}
     params = param_groups(
         model,
         weight_decay=float(node.pop("weight_decay", 0.0)),
         no_decay_patterns=no_decay,
+        lr_mult_patterns=lr_mult,
         verbose=verbose,
     )
     return registry.optimizers.build(

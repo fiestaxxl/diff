@@ -27,34 +27,64 @@ def param_groups(
     model: nn.Module,
     weight_decay: float,
     no_decay_patterns: Iterable[str] = (),
+    lr_mult_patterns: Optional[Dict[str, float]] = None,
     verbose: bool = True,
 ) -> List[Dict[str, Any]]:
+    """Split the parameters by weight decay, and optionally by learning rate.
+
+    ``lr_mult_patterns`` maps a substring of a parameter name to a multiplier on the
+    scheduled learning rate. It exists for fine-tuning a pretrained submodule beside
+    freshly initialised ones: a text encoder that has already converged needs a far
+    smaller step than a cross-attention that starts at zero, and one rate cannot serve
+    both. The multiplier rides on the group as ``lr_mult`` and the trainer applies it at
+    every optimizer step, because the scheduler produces one number for the whole run.
+
+    The first pattern a name matches wins, so order the dictionary from specific to
+    general. Parameters matching nothing get a multiplier of 1.0.
+    """
     no_decay_patterns = tuple(no_decay_patterns)
-    decay_params: List[nn.Parameter] = []
-    nodecay_params: List[nn.Parameter] = []
+    lr_mult_patterns = dict(lr_mult_patterns or {})
+    # 1.0 last: it is the fallback bucket, and insertion order decides matching.
+    buckets: Dict[float, Dict[str, List[nn.Parameter]]] = {}
     seen = set()
+
+    def bucket_for(name: str) -> float:
+        for pattern, mult in lr_mult_patterns.items():
+            if pattern in name:
+                return float(mult)
+        return 1.0
 
     for name, p in model.named_parameters():
         if not p.requires_grad or id(p) in seen:
             continue
         seen.add(id(p))
+        mult = bucket_for(name)
+        side = buckets.setdefault(mult, {"decay": [], "nodecay": []})
         if any(pat in name for pat in no_decay_patterns):
-            nodecay_params.append(p)
+            side["nodecay"].append(p)
         elif p.dim() >= 2:
-            decay_params.append(p)
+            side["decay"].append(p)
         else:
-            nodecay_params.append(p)
+            side["nodecay"].append(p)
+
+    groups: List[Dict[str, Any]] = []
+    for mult in sorted(buckets, key=lambda m: (m != 1.0, m)):
+        side = buckets[mult]
+        if side["decay"]:
+            groups.append({"params": side["decay"], "weight_decay": weight_decay,
+                           "lr_mult": mult})
+        if side["nodecay"]:
+            groups.append({"params": side["nodecay"], "weight_decay": 0.0,
+                           "lr_mult": mult})
 
     if verbose:
-        nd = sum(p.numel() for p in decay_params)
-        nn_ = sum(p.numel() for p in nodecay_params)
-        print(f"decayed: {len(decay_params)} tensors, {nd:,} params")
-        print(f"non-decayed: {len(nodecay_params)} tensors, {nn_:,} params")
+        for g in groups:
+            kind = "decayed" if g["weight_decay"] else "non-decayed"
+            total = sum(p.numel() for p in g["params"])
+            print(f"{kind} (lr x{g['lr_mult']:g}): {len(g['params'])} tensors, "
+                  f"{total:,} params")
 
-    return [
-        {"params": decay_params, "weight_decay": weight_decay},
-        {"params": nodecay_params, "weight_decay": 0.0},
-    ]
+    return groups
 
 
 @registry.optimizers.register("adamw")
