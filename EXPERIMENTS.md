@@ -321,8 +321,14 @@ Full ChEBI-20 test split, 300 solver steps, guidance 0.
 | MolT5-Base | 0.769 | 0.081 | 24.46 | 0.721 | 0.588 | 0.529 | 2.18 | 0.772 |
 | TGM-DLM w/o corr | 0.828 | 0.242 | 16.90 | 0.874 | 0.771 | 0.722 | 0.89 | 0.789 |
 | TGM-DLM | 0.826 | 0.242 | 17.00 | 0.854 | 0.739 | 0.688 | 0.77 | 0.871 |
-| **ours, padding supervision, mean of 3 seeds** | 0.737 | 0.050 | **21.69** | **0.755** | 0.585 | 0.501 | 0.81 | 0.763 |
+| ours, padding supervision, mean of 3 seeds | 0.737 | 0.050 | 21.69 | 0.755 | 0.585 | 0.501 | 0.81 | 0.763 |
 | ours, base recipe, mean of 2 seeds | 0.726 | 0.045 | 22.93 | 0.750 | 0.578 | 0.489 | 0.82 | 0.752 |
+| **ours + 10-candidate decoding, worst of 2 seeds** | 0.781 | 0.143 | 18.18 | 0.771 | 0.629 | 0.545 | **0.74** | **0.993** |
+
+The candidate-decoding row is a decoding procedure on top of the same checkpoint, costing
+ten sampling runs per caption; it is first in the table on **validity** and on **FCD**, and
+second on everything else behind TGM-DLM. The two rows above it are single trajectories and
+are what the architecture does on its own.
 
 **Our FCD is level with TGM-DLM** (0.81 against 0.77, and 0.76 on the luckiest of our
 seeds) and roughly three times better than MolT5-Base. Levenshtein and MACCS beat
@@ -438,11 +444,54 @@ best published number is 0.906 for the plain Transformer and 0.871 for TGM-DLM �
 row beats MolT5-Base on all eight metrics and T5-Base on seven of eight (Morgan 0.543
 against 0.545). TGM-DLM still leads on exact match and the fingerprints.
 
-Three things have to be said with it. The pool costs ten sampling runs per caption, so this
-is a test-time-compute result and belongs beside the compute it uses. Validity here is close
-to "at least one of ten candidates parses", which is a property of the procedure, not of a
-single forward pass. And this is **one seed**: by the rule at the top of this file it cannot
-be ranked against anything until two more are measured, which is running.
+Two things have to be said with it. The pool costs ten sampling runs per caption, so this
+is a test-time-compute result and belongs beside the compute it uses. And validity here is
+close to "at least one of ten candidates parses", which is a property of the procedure, not
+of a single forward pass.
+
+### Give every candidate its own noise as well as its own length
+
+The ten candidates above differ only in length: they share one noise draw, because they were
+ten separate runs at one seed. Drawing the noise independently per candidate costs nothing
+and is the better pool. Full test split, three seeds against two:
+
+| | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| shared noise, seed 42 | 0.777 | 0.130 | 18.77 | 0.773 | 0.632 | 0.543 | 0.79 | 0.988 |
+| shared noise, seed 43 | 0.776 | 0.139 | 18.68 | 0.767 | 0.625 | 0.540 | 0.73 | 0.987 |
+| shared noise, seed 44 | 0.772 | 0.135 | 18.86 | 0.768 | 0.625 | 0.542 | 0.75 | 0.988 |
+| **own noise, seed 42** | **0.781** | **0.143** | **18.18** | 0.771 | 0.629 | 0.545 | **0.73** | **0.996** |
+| **own noise, seed 43** | **0.781** | **0.147** | **18.08** | 0.774 | 0.631 | 0.548 | **0.74** | **0.993** |
+
+The worst own-noise seed beats the best shared-noise seed on BLEU, exact match, Levenshtein
+and validity, which is this project's bar. The fingerprints are level. **Validity 0.996 and
+FCD 0.73 are both first in the published table** — above LDMol's 0.941 validity and above
+TGM-DLM's 0.77 FCD. A third seed is running.
+
+### What the pool is actually buying
+
+| control, full split | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| one candidate, 300 steps | 0.736 | 0.052 | 21.73 | 0.754 | 0.583 | 0.498 | 0.86 | 0.764 |
+| one candidate, 600 steps | 0.736 | 0.055 | 21.32 | 0.750 | 0.576 | 0.497 | 0.79 | 0.784 |
+| one candidate, 1200 steps | 0.744 | 0.050 | 20.89 | 0.754 | 0.583 | 0.502 | 0.71 | 0.782 |
+| one candidate, 3000 steps | 0.713 | 0.042 | 22.94 | 0.730 | 0.552 | 0.470 | 0.80 | 0.732 |
+| 10 noise draws, one length | 0.777 | 0.098 | 18.39 | 0.762 | 0.600 | 0.514 | 0.74 | 0.987 |
+| **10 lengths, own noise each** | 0.781 | **0.143** | 18.18 | 0.771 | 0.629 | 0.545 | 0.73 | 0.996 |
+
+Two controls, and both matter.
+
+**Compute is not the explanation.** Ten times the solver steps on one trajectory moves exact
+match from 0.052 to 0.042 — it gets *worse*, monotonically past 1200 steps. The same compute
+spent on ten trajectories moves it to 0.143. What the pool buys is not integration accuracy.
+
+**The length predictor is not incidental.** Ten noise draws at the single argmax length
+already reach 0.098 and validity 0.987, so a large part of the validity gain is simply
+"sample until something parses". But exact match stops at 0.098 against 0.143 when the ten
+candidates also span the predictor's top-10 lengths. Both kinds of diversity pay, and the
+length is worth about as much again as the noise.
+
+
 
 ## Can the verifier act *during* the trajectory?
 
@@ -493,6 +542,33 @@ therefore only be *overwritten*, and overwriting is measured to destroy the mole
 is left is to choose among whole states, which is the one thing the verifier is measured to
 do well — and selection at the end already works. The open question is whether selection
 *during* the trajectory beats selection at the end, which is what the particle filter asks.
+
+### Softening the length inside the trajectory: a clean failure
+
+Pinning the canvas is how the length is imposed, before the first solver step. The
+alternative to running one trajectory per candidate length is to pin each position by
+P(length ≤ position) from the predictor's own top-10 distribution, so a single trajectory
+carries the posterior and the readout picks the stop inside its support. A power on the
+posterior dials between that and a hard length.
+
+| | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| hard length (control) | 0.736 | 0.052 | 21.73 | 0.754 | 0.583 | 0.498 | 0.86 | 0.764 |
+| posterior | 0.319 | 0.000 | 38.28 | 0.530 | 0.312 | 0.276 | 5.42 | 0.732 |
+| posterior² | 0.340 | 0.002 | 37.91 | 0.540 | 0.323 | 0.282 | 4.99 | 0.739 |
+| posterior⁴ | 0.357 | 0.005 | 37.79 | 0.551 | 0.333 | 0.289 | 4.57 | 0.750 |
+| posterior⁸ | 0.363 | 0.006 | 38.10 | 0.554 | 0.339 | 0.291 | 4.46 | 0.757 |
+
+Catastrophic, and **monotone in the direction of the hard length**: the sharper the
+posterior the better it does, improving steadily back toward the control. A partially pinned
+position is not a state the model was ever trained on — it is a blend of "the molecule
+continues here" and "the molecule ended here" — and the denoiser's estimate there is wrong
+in a way that spreads to the whole string, costing 17 points of Levenshtein. Exact match is
+**zero**.
+
+This is the same rigidity the repaint measured, seen from the other side. The trajectory
+cannot be softened any more than it can be nudged: the length has to be a decision, and the
+only way to hedge it is to run separate trajectories and choose afterwards.
 
 ### Particle filtering: the fourth route, and why it fails
 

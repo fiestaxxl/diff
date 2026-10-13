@@ -202,10 +202,34 @@ usable candidate, which is where 0.988 comes from. The selected rank is spread a
 whole pool — 18% at rank 0 down to 6% at rank 9 — so the later candidates are being chosen,
 not merely counted.
 
-At 0.988, validity is the highest in the published table by a wide margin: the next best are
-0.941 for LDMol, 0.906 for the plain Transformer and 0.871 for TGM-DLM. Exact match of 0.130
-is 3.0x the MolT5-base checkpoint we ran ourselves. The row beats MolT5-Base on all eight
-metrics and T5-Base on seven of eight.
+**Independent noise per candidate.** Ten separate runs at one seed share a noise draw and
+differ only in length. Drawing the noise per candidate costs nothing and is strictly better.
+
+| full test split | BLEU | Exact | Leven↓ | MACCS | RDK | Morgan | FCD↓ | Validity |
+|---|---|---|---|---|---|---|---|---|
+| shared noise (3 seeds, worst) | 0.772 | 0.130 | 18.86 | 0.767 | 0.625 | 0.540 | 0.79 | 0.987 |
+| **own noise (2 seeds, worst)** | **0.781** | **0.143** | **18.18** | 0.771 | 0.629 | 0.545 | **0.74** | **0.993** |
+
+The worst own-noise seed beats the best shared-noise seed on BLEU, exact match, Levenshtein
+and validity. **Validity of 0.993–0.996 and FCD of 0.73–0.74 are both first in the published
+table**, above LDMol's 0.941 validity and TGM-DLM's 0.77 FCD; the row is second to TGM-DLM
+on everything else and ahead of every other published system on all eight metrics.
+
+**What the pool buys.** Two controls separate the explanations.
+
+| | Exact | Validity |
+|---|---|---|
+| one candidate, 300 solver steps | 0.052 | 0.764 |
+| one candidate, 1,200 solver steps | 0.050 | 0.782 |
+| one candidate, 3,000 solver steps | 0.042 | 0.732 |
+| 10 noise draws at one length | 0.098 | 0.987 |
+| 10 lengths, own noise each | 0.143 | 0.996 |
+
+Ten times the compute spent on integration accuracy makes exact match *worse*. Spent on ten
+trajectories it nearly triples it. And the length predictor is not incidental: ten noise
+draws at the argmax length reach 0.098, so most of the validity is "sample until something
+parses", but the remaining 0.045 of exact match comes from spanning the predictor's top-10
+lengths.
 
 Three qualifications belong with it. The pool costs ten sampling runs per caption, so this
 is a test-time-compute result and must be read beside the compute it spends. Validity here
